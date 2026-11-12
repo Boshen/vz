@@ -1,0 +1,39 @@
+minimumReleaseAgeExclude:
+  - "@cloudflare/build-output-utils@0.9.13"
+  - "@cloudflare/codemods@0.7.7"
+  - "@cloudflare/config@0.32.0"
+  - "@cloudflare/runtime-types@0.1.26"
+  - "@cloudflare/vite-plugin@2.0.0-beta.v.15"
+  - "@cloudflare/workers-auth@0.18.1"
+  - "@cloudflare/workers-utils@0.53.1"
+  - "@void/deploy-cloudflare@1.8.0"
+  - "@void/deploy-core@1.8.0"
+  - "@void/edge@1.8.0"
+  - "@void/isr@1.8.0"
+  - "@void/platform@1.8.0"
+  - "@voidzero-dev/vite-plus-core@1.6.0"
+  - "@voidzero-dev/vite-plus-darwin-arm64@1.6.0"
+  - "@voidzero-dev/vite-plus-darwin-x64@1.6.0"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu@1.6.0"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl@1.6.0"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu@1.6.0"
+  - "@voidzero-dev/vite-plus-linux-x64-musl@1.6.0"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc@1.6.0"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc@1.6.0"
+  - cf@1.0.0-beta.30
+  - hono@4.13.18
+  - miniflare@5.20261110.1-beta
+  - vite-plus@1.6.0
+  - void@1.8.0
+  - "@void/react@1.8.0"
+
+allowBuilds:
+  better-sqlite3: false
+  esbuild: true
+  sharp: true
+  workerd: true
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@^1.6.0
+peerDependencyRules:
+  allowedVersions:
+    vite: "*"
