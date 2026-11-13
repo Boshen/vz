@@ -8,7 +8,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["void/env", "node"],
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": [
     "src",

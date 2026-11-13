@@ -12,11 +12,19 @@
     "postinstall": "void prepare"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.5",
     "@vz/protocol": "workspace:*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cn": "^0.5.2",
     "hono": "^4.11.9",
     "jose": "^6.1.0",
+    "lucide-react": "^1.72.0",
+    "radix-ui": "^1.8.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.5",
     "zod": "^4.0.0"
   },
   "devDependencies": {

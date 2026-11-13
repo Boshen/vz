@@ -8,6 +8,21 @@ import {
   type DiagnosticRow,
   type Provenance,
 } from "@vz/protocol";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  ArrowUpRight,
+  ArrowRight,
+  Boxes,
+  FolderGit2,
+  LockKeyhole,
+  LayoutGrid,
+  GitBranch,
+} from "lucide-react";
 import "../pages/style.css";
 
 interface Project {
@@ -67,11 +82,11 @@ function Notice({ children, error = false }: { children: ReactNode; error?: bool
 }
 function Metric({ name, value, hint }: { name: string; value: string | number; hint?: string }) {
   return (
-    <div className="metric">
+    <Card className="metric gap-2">
       <span>{name}</span>
       <strong>{value}</strong>
-      {hint && <small>{hint}</small>}
-    </div>
+      {hint && <small className="text-muted-foreground">{hint}</small>}
+    </Card>
   );
 }
 
@@ -137,12 +152,12 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
           <span className="brand-mark">
             vz<span>↗</span>
           </span>
-          <span>Build intelligence</span>
+          <span>Build diagnostics</span>
         </a>
         <div className="workspace-label">
-          WORKSPACE <span>GITHUB</span>
+          Workspace <GitBranch size={13} />
         </div>
-        <input
+        <Input
           className="project-search"
           aria-label="Filter projects"
           placeholder="Find a project…"
@@ -151,7 +166,8 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
         />
         <nav className="project-nav" aria-label="Projects">
           <a href="/" className={!projectId && !reportId ? "active" : ""}>
-            <span>▦</span>All projects
+            <LayoutGrid size={16} />
+            All projects
           </a>
           {projects
             .filter((item) =>
@@ -163,7 +179,7 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                 href={`/projects/${item.id}`}
                 className={item.id === (projectId ?? report?.projectId) ? "active" : ""}
               >
-                <span>{item.private ? "◈" : "◇"}</span>
+                {item.private ? <LockKeyhole size={16} /> : <FolderGit2 size={16} />}
                 <div>
                   {item.key}
                   <small>{item.repository}</small>
@@ -172,9 +188,9 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
             ))}
         </nav>
         {nextProjectPage !== null && (
-          <button className="text-button" onClick={loadProjects}>
+          <Button variant="outline" className="text-button" onClick={loadProjects}>
             Load more projects
-          </button>
+          </Button>
         )}
         <div className="sidebar-bottom">
           <span className="status-dot" />
@@ -202,7 +218,8 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
             {session.user ? (
               <>
                 <span>{session.user.name}</span>
-                <button
+                <Button
+                  variant="outline"
                   className="text-button"
                   onClick={async () => {
                     await auth.signOut();
@@ -210,14 +227,14 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                   }}
                 >
                   Sign out
-                </button>
+                </Button>
               </>
             ) : session.authConfigured ? (
-              <button className="button small" onClick={signIn}>
+              <Button variant="outline" className={buttonVariants({ size: "sm" })} onClick={signIn}>
                 Sign in with GitHub
-              </button>
+              </Button>
             ) : (
-              <a className="button small secondary" href="/setup">
+              <a className={buttonVariants({ variant: "outline", size: "sm" })} href="/setup">
                 Setup guide ↗
               </a>
             )}
@@ -226,28 +243,36 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
         <main>
           {error && <Notice error>{error}</Notice>}
           {loading ? (
-            <Notice>Loading your build workspace…</Notice>
+            <div role="status" aria-label="Loading workspace" className="space-y-6">
+              <Skeleton className="h-9 w-52" />
+              <Skeleton className="h-4 w-80 max-w-full" />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Skeleton className="h-48 rounded-xl" />
+                <Skeleton className="h-48 rounded-xl" />
+              </div>
+            </div>
           ) : report ? (
             <Report report={report} builds={history?.builds ?? []} onError={setError} />
           ) : history ? (
             <>
               <div className="eyebrow">
                 {history.project.repository}{" "}
-                <span className="pill">{history.project.private ? "Private" : "Public"}</span>
+                <Badge variant="secondary">{history.project.private ? "Private" : "Public"}</Badge>
               </div>
               <div className="page-heading">
                 <div>
                   <h1>{history.project.key}</h1>
                   <p>Every build. Every module. The full picture.</p>
                 </div>
-                <a className="button secondary" href="/setup">
+                <a className={buttonVariants({ variant: "outline" })} href="/setup">
                   Configure uploads ↗
                 </a>
               </div>
               <BuildHistory builds={history.builds} />
               {history.nextPage !== null && (
-                <button
-                  className="button secondary"
+                <Button
+                  variant="outline"
+                  className={buttonVariants({ variant: "outline" })}
                   onClick={async () => {
                     try {
                       const next = await api<History>(
@@ -262,46 +287,50 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                   }}
                 >
                   Load older builds
-                </button>
+                </Button>
               )}
             </>
           ) : (
             <>
               <div className="eyebrow">
-                <span className="status-dot" /> YOUR BUILD WORKSPACE
+                <span className="status-dot" /> Workspace overview
               </div>
               <div className="page-heading">
                 <div>
-                  <h1>See what ships.</h1>
-                  <p>Bundle sizes, plugin costs, and the code behind every build.</p>
+                  <h1>Projects</h1>
+                  <p>Explore your builds. Understand every byte.</p>
                 </div>
                 <a
-                  className="button"
+                  className={buttonVariants()}
                   href={
                     session.appSlug
                       ? `https://github.com/apps/${encodeURIComponent(session.appSlug)}/installations/new`
                       : "/setup"
                   }
                 >
-                  Connect GitHub <span>↗</span>
+                  <GitBranch size={15} /> Connect repository <ArrowUpRight size={14} />
                 </a>
               </div>
               <div className="section-title">
-                <h2>Projects</h2>
+                <h2>Connected projects</h2>
                 <span>{projects.length} visible</span>
               </div>
               {projects.length ? (
                 <div className="project-grid">
                   {projects.map((item) => (
-                    <a href={`/projects/${item.id}`} className="project-card" key={item.id}>
-                      <span className="project-icon">{item.key.slice(0, 1).toUpperCase()}</span>
-                      <span className="pill">{item.private ? "Private" : "Public"}</span>
-                      <h2>{item.key}</h2>
-                      <p>{item.repository}</p>
-                      <div>
-                        Explore builds <span>→</span>
-                      </div>
-                    </a>
+                    <Card className="project-card gap-0 py-0" key={item.id}>
+                      <a href={`/projects/${item.id}`} className="project-card-link">
+                        <span className="project-icon">
+                          <Boxes size={19} />
+                        </span>
+                        <Badge variant="secondary">{item.private ? "Private" : "Public"}</Badge>
+                        <h2>{item.key}</h2>
+                        <p>{item.repository}</p>
+                        <div className="project-card-bottom">
+                          Explore builds <ArrowRight size={15} />
+                        </div>
+                      </a>
+                    </Card>
                   ))}
                 </div>
               ) : (
@@ -313,7 +342,7 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                     <br />
                     Your first successful upload creates a project automatically.
                   </p>
-                  <a className="button" href="/setup">
+                  <a className={buttonVariants()} href="/setup">
                     Set up your first project →
                   </a>
                   <code>vite-plugin-vz</code>
@@ -516,7 +545,7 @@ function Report({
   return (
     <>
       <div className="eyebrow">
-        {report.repository} <span className="pill success">Completed</span>
+        {report.repository} <Badge variant="secondary">Completed</Badge>
       </div>
       <div className="page-heading">
         <div>
@@ -529,7 +558,7 @@ function Report({
           </p>
         </div>
         <a
-          className="button secondary"
+          className={buttonVariants({ variant: "outline" })}
           href={`https://github.com/${report.repository}/actions/runs/${report.provenance.runId}`}
           target="_blank"
           rel="noreferrer"
@@ -559,205 +588,216 @@ function Report({
           hint="From the Rolldown package graph"
         />
       </div>
-      <div className="tabs" role="tablist" aria-label="Report sections">
-        {["overview", ...datasets, "compare"].map((item) => (
-          <button
-            key={item}
-            role="tab"
-            aria-selected={item === tab}
-            className={item === tab ? "selected" : ""}
-            onClick={() => {
-              setTab(item);
-              setPage(0);
-              setQuery("");
-            }}
-          >
-            {labels[item]}
-          </button>
-        ))}
-      </div>
-      {tab === "compare" ? (
-        <>
-          <div className="toolbar">
-            <h2>Build comparison</h2>
-            <select
-              aria-label="Baseline build"
-              value={baseline}
-              onChange={(event) => setBaseline(event.target.value)}
-            >
-              <option value="">Previous build on this branch</option>
-              {builds
-                .filter(
-                  (build) => build.id !== report.id && build.environment === report.environment,
-                )
-                .map((build) => (
-                  <option key={build.id} value={build.id}>
-                    {build.provenance.sha.slice(0, 7)} · {date(build.createdAt)}
-                  </option>
-                ))}
-            </select>
-          </div>
-          {comparison?.metrics ? (
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          setTab(value);
+          setPage(0);
+          setQuery("");
+        }}
+        className="mt-7 gap-4"
+      >
+        <TabsList
+          aria-label="Report sections"
+          className="h-auto max-w-full justify-start overflow-x-auto"
+        >
+          {["overview", ...datasets, "compare"].map((item) => (
+            <TabsTrigger key={item} value={item}>
+              {labels[item]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <TabsContent key={tab} value={tab}>
+          {tab === "compare" ? (
             <>
-              <div className="panel table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Metric</th>
-                      <th>Baseline</th>
-                      <th>This build</th>
-                      <th>Change</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(comparison.metrics).map(([key, value]) => (
-                      <tr key={key}>
-                        <td>{key}</td>
-                        <td>
-                          {key === "outputBytes"
-                            ? bytes(value.before)
-                            : key === "durationMs"
-                              ? time(value.before)
-                              : value.before}
-                        </td>
-                        <td>
-                          {key === "outputBytes"
-                            ? bytes(value.after)
-                            : key === "durationMs"
-                              ? time(value.after)
-                              : value.after}
-                        </td>
-                        <td className={value.delta > 0 ? "regression" : "improvement"}>
-                          {value.delta > 0 ? "+" : ""}
-                          {key === "outputBytes"
-                            ? bytes(value.delta)
-                            : key === "durationMs"
-                              ? time(value.delta)
-                              : value.delta}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
               <div className="toolbar">
+                <h2>Build comparison</h2>
                 <select
-                  aria-label="Compare dataset"
-                  value={compareDataset}
-                  onChange={(event) => {
-                    setCompareDataset(event.target.value as Dataset);
-                    setPage(0);
-                  }}
+                  aria-label="Baseline build"
+                  value={baseline}
+                  onChange={(event) => setBaseline(event.target.value)}
                 >
-                  {datasets
-                    .filter((item) => item !== "events")
-                    .map((item) => (
-                      <option key={item} value={item}>
-                        {labels[item]}
+                  <option value="">Previous build on this branch</option>
+                  {builds
+                    .filter(
+                      (build) => build.id !== report.id && build.environment === report.environment,
+                    )
+                    .map((build) => (
+                      <option key={build.id} value={build.id}>
+                        {build.provenance.sha.slice(0, 7)} · {date(build.createdAt)}
                       </option>
                     ))}
                 </select>
-                <span className="muted">{differences.length} changed records</span>
               </div>
-              {loading ? (
-                <Notice>Comparing datasets…</Notice>
-              ) : (
+              {comparison?.metrics ? (
                 <>
-                  <Rows
-                    rows={differences.slice(page * 100, (page + 1) * 100)}
-                    onSelect={setSelected}
-                    delta
-                  />
-                  <Pagination
-                    page={page}
-                    pages={Math.ceil(differences.length / 100)}
-                    onChange={setPage}
-                  />
+                  <div className="panel table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Metric</th>
+                          <th>Baseline</th>
+                          <th>This build</th>
+                          <th>Change</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(comparison.metrics).map(([key, value]) => (
+                          <tr key={key}>
+                            <td>{key}</td>
+                            <td>
+                              {key === "outputBytes"
+                                ? bytes(value.before)
+                                : key === "durationMs"
+                                  ? time(value.before)
+                                  : value.before}
+                            </td>
+                            <td>
+                              {key === "outputBytes"
+                                ? bytes(value.after)
+                                : key === "durationMs"
+                                  ? time(value.after)
+                                  : value.after}
+                            </td>
+                            <td className={value.delta > 0 ? "regression" : "improvement"}>
+                              {value.delta > 0 ? "+" : ""}
+                              {key === "outputBytes"
+                                ? bytes(value.delta)
+                                : key === "durationMs"
+                                  ? time(value.delta)
+                                  : value.delta}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="toolbar">
+                    <select
+                      aria-label="Compare dataset"
+                      value={compareDataset}
+                      onChange={(event) => {
+                        setCompareDataset(event.target.value as Dataset);
+                        setPage(0);
+                      }}
+                    >
+                      {datasets
+                        .filter((item) => item !== "events")
+                        .map((item) => (
+                          <option key={item} value={item}>
+                            {labels[item]}
+                          </option>
+                        ))}
+                    </select>
+                    <span className="muted">{differences.length} changed records</span>
+                  </div>
+                  {loading ? (
+                    <Notice>Comparing datasets…</Notice>
+                  ) : (
+                    <>
+                      <Rows
+                        rows={differences.slice(page * 100, (page + 1) * 100)}
+                        onSelect={setSelected}
+                        delta
+                      />
+                      <Pagination
+                        page={page}
+                        pages={Math.ceil(differences.length / 100)}
+                        onChange={setPage}
+                      />
+                    </>
+                  )}
                 </>
+              ) : (
+                <Notice>
+                  No compatible baseline yet. Upload another build for this app and environment.
+                </Notice>
               )}
             </>
           ) : (
-            <Notice>
-              No compatible baseline yet. Upload another build for this app and environment.
-            </Notice>
-          )}
-        </>
-      ) : (
-        <>
-          {tab === "overview" && (
-            <div className="report-overview">
-              <div className="panel">
-                <div className="panel-heading">
-                  <h2>Output composition</h2>
-                  <span>BYTES</span>
-                </div>
-                <SizeMap rows={rows} onSelect={setSelected} />
-              </div>
-              <div className="panel build-context">
-                <h2>Build context</h2>
-                <dl>
-                  <dt>Uploaded</dt>
-                  <dd>{date(report.createdAt)}</dd>
-                  <dt>Actor</dt>
-                  <dd>{report.provenance.actor}</dd>
-                  <dt>Checkout</dt>
-                  <dd className="mono">{report.manifest.checkoutSha.slice(0, 12)}</dd>
-                  <dt>Workflow attempt</dt>
-                  <dd>{report.provenance.runAttempt}</dd>
-                  <dt>Producer</dt>
-                  <dd>Vite {report.manifest.producer.vite}</dd>
-                </dl>
-              </div>
-            </div>
-          )}
-          <div className="toolbar">
-            <h2>{tab === "overview" ? "Output assets" : labels[tab]}</h2>
-            <input
-              aria-label="Filter current page"
-              placeholder="Filter this page…"
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setRowPage(0);
-              }}
-            />
-          </div>
-          {loading ? (
-            <Notice>Loading diagnostics…</Notice>
-          ) : filtered.length ? (
             <>
-              <div className="diagnostic-layout">
-                <div>
-                  <Rows
-                    rows={filtered.slice(rowPage * 100, (rowPage + 1) * 100)}
-                    onSelect={setSelected}
-                  />
-                  <Pagination
-                    page={rowPage}
-                    pages={Math.ceil(filtered.length / 100)}
-                    onChange={setRowPage}
-                  />
-                  {tab === "events" && <Timeline rows={filtered} />}
-                  {(tab === "modules" || tab === "chunks") && selected && <Graph row={selected} />}
-                  {(tab === "packages" || tab === "modules") && (
-                    <SizeMap rows={filtered} onSelect={setSelected} />
-                  )}
+              {tab === "overview" && (
+                <div className="report-overview">
+                  <div className="panel">
+                    <div className="panel-heading">
+                      <h2>Output composition</h2>
+                      <span>BYTES</span>
+                    </div>
+                    <SizeMap rows={rows} onSelect={setSelected} />
+                  </div>
+                  <div className="panel build-context">
+                    <h2>Build context</h2>
+                    <dl>
+                      <dt>Uploaded</dt>
+                      <dd>{date(report.createdAt)}</dd>
+                      <dt>Actor</dt>
+                      <dd>{report.provenance.actor}</dd>
+                      <dt>Checkout</dt>
+                      <dd className="mono">{report.manifest.checkoutSha.slice(0, 12)}</dd>
+                      <dt>Workflow attempt</dt>
+                      <dd>{report.provenance.runAttempt}</dd>
+                      <dt>Producer</dt>
+                      <dd>Vite {report.manifest.producer.vite}</dd>
+                    </dl>
+                  </div>
                 </div>
-                {selected && (
-                  <Details row={selected} reportId={report.id} onClose={() => setSelected(null)} />
-                )}
+              )}
+              <div className="toolbar">
+                <h2>{tab === "overview" ? "Output assets" : labels[tab]}</h2>
+                <Input
+                  aria-label="Filter current page"
+                  placeholder="Filter this page…"
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setRowPage(0);
+                  }}
+                />
               </div>
-              <Pagination page={page} pages={pages} onChange={setPage} />
+              {loading ? (
+                <Notice>Loading diagnostics…</Notice>
+              ) : filtered.length ? (
+                <>
+                  <div className="diagnostic-layout">
+                    <div>
+                      <Rows
+                        rows={filtered.slice(rowPage * 100, (rowPage + 1) * 100)}
+                        onSelect={setSelected}
+                      />
+                      <Pagination
+                        page={rowPage}
+                        pages={Math.ceil(filtered.length / 100)}
+                        onChange={setRowPage}
+                      />
+                      {tab === "events" && <Timeline rows={filtered} />}
+                      {(tab === "modules" || tab === "chunks") && selected && (
+                        <Graph row={selected} />
+                      )}
+                      {(tab === "packages" || tab === "modules") && (
+                        <SizeMap rows={filtered} onSelect={setSelected} />
+                      )}
+                    </div>
+                    {selected && (
+                      <Details
+                        row={selected}
+                        reportId={report.id}
+                        onClose={() => setSelected(null)}
+                      />
+                    )}
+                  </div>
+                  <Pagination page={page} pages={pages} onChange={setPage} />
+                </>
+              ) : (
+                <Notice>
+                  {query
+                    ? "No matching records on this page."
+                    : "This diagnostic dataset is unavailable for this build."}
+                </Notice>
+              )}
             </>
-          ) : (
-            <Notice>
-              {query
-                ? "No matching records on this page."
-                : "This diagnostic dataset is unavailable for this build."}
-            </Notice>
           )}
-        </>
-      )}
+        </TabsContent>
+      </Tabs>
       <div className="report-footer">
         <div>
           <span className="status-dot" /> Full Rolldown diagnostics{" "}
@@ -771,7 +811,8 @@ function Report({
                 Download {artifact.kind} ↓
               </a>
             ))}
-          <button
+          <Button
+            variant="outline"
             className="text-button danger"
             onClick={async () => {
               if (!confirm("Delete this report and all its diagnostic artifacts?")) return;
@@ -781,7 +822,7 @@ function Report({
             }}
           >
             Delete report
-          </button>
+          </Button>
         </div>
       </div>
     </>
@@ -798,23 +839,25 @@ function Pagination({
 }) {
   return pages > 1 ? (
     <div className="pagination">
-      <button
+      <Button
+        variant="outline"
         className="button secondary small"
         disabled={!page}
         onClick={() => onChange(page - 1)}
       >
         ← Previous
-      </button>
+      </Button>
       <span>
         Page {page + 1} of {pages}
       </span>
-      <button
+      <Button
+        variant="outline"
         className="button secondary small"
         disabled={page >= pages - 1}
         onClick={() => onChange(page + 1)}
       >
         Next →
-      </button>
+      </Button>
     </div>
   ) : null;
 }
@@ -842,9 +885,14 @@ function Rows({
           {rows.map((row) => (
             <tr key={row.id}>
               <td>
-                <button className="row-link" onClick={() => onSelect(row)} title={row.name}>
+                <Button
+                  variant="outline"
+                  className="row-link"
+                  onClick={() => onSelect(row)}
+                  title={row.name}
+                >
                   {row.name}
-                </button>
+                </Button>
                 {(row.plugin || row.version) && (
                   <small>
                     {row.plugin} {row.hook} {row.version}
@@ -886,7 +934,8 @@ function SizeMap({
     <div className="size-map">
       {items.length ? (
         items.map((row, index) => (
-          <button
+          <Button
+            variant="outline"
             key={row.id}
             style={{
               flexGrow: (row.bytes! / total) * 100,
@@ -898,7 +947,7 @@ function SizeMap({
           >
             <strong>{row.name.split("/").at(-1)}</strong>
             <span>{bytes(row.bytes!)}</span>
-          </button>
+          </Button>
         ))
       ) : (
         <p className="muted">No size measurements available.</p>
@@ -1003,9 +1052,14 @@ function Details({
     <aside className="panel details">
       <div className="panel-heading">
         <h3>Record details</h3>
-        <button className="text-button" aria-label="Close record details" onClick={onClose}>
+        <Button
+          variant="outline"
+          className="text-button"
+          aria-label="Close record details"
+          onClick={onClose}
+        >
           ×
-        </button>
+        </Button>
       </div>
       <h4>{row.name}</h4>
       {error && <Notice error>{error}</Notice>}
