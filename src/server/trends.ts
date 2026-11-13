@@ -163,35 +163,54 @@ export async function indexBuild(
 ): Promise<boolean> {
   const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
   if (indexed?.version === VERSION) return true;
-  const prefix = `reports/${build.id}/.trend-index-${VERSION}`;
+  const prefix = `reports/${build.id}/.trend-index-${VERSION}-chunks`;
   const cached = await storage.get(`${prefix}/plan`);
-  let batches: Measurement[][];
+  let count: number;
   if (cached) {
-    batches = await new Response(cached.body.pipeThrough(new DecompressionStream("gzip"))).json();
+    count = ((await cached.json()) as { count: number }).count;
   } else {
-    batches = await prepareIndex(build, descriptions);
-    await storage.put(`${prefix}/plan`, gzipSync(JSON.stringify(batches)));
+    const batches = await prepareIndex(build, descriptions);
+    count = batches.length;
+    for (let i = 0; i < count; i += 3)
+      await Promise.all(
+        batches.slice(i, i + 3).map(async (rows, offset) => {
+          await storage.put(`${prefix}/${i + offset}`, gzipSync(JSON.stringify(rows)));
+          batches[i + offset] = [];
+        }),
+      );
+    await storage.put(`${prefix}/plan`, Buffer.from(JSON.stringify({ count })));
+    // Release the full aggregation before beginning database writes.
+    if (count > 16) return false;
   }
   const checkpoint = await storage.get(`${prefix}/cursor`);
   const cursor = checkpoint ? ((await checkpoint.json()) as { cursor: number }).cursor : 0;
-  const end = Math.min(cursor + 16, batches.length);
+  const end = Math.min(cursor + 16, count);
   for (let i = cursor; i < end; i += 4)
     await Promise.all(
-      batches.slice(i, Math.min(i + 4, end)).map((rows) =>
-        db.run(sql`
+      Array.from({ length: Math.min(4, end - i) }, async (_, offset) => {
+        const object = await storage.get(`${prefix}/${i + offset}`);
+        if (!object) throw new Error("Missing timeline index checkpoint");
+        const rows = await new Response(
+          object.body.pipeThrough(new DecompressionStream("gzip")),
+        ).json();
+        return db.run(sql`
     INSERT INTO trend_measurements (build_id, dataset, entity, label, metrics)
     SELECT ${build.id}, json_extract(value, '$.dataset'), json_extract(value, '$.entity'), json_extract(value, '$.label'), json_extract(value, '$.metrics')
     FROM json_each(${JSON.stringify(rows)}) WHERE true
     ON CONFLICT (build_id, dataset, entity) DO UPDATE SET label = excluded.label, metrics = excluded.metrics
-  `),
-      ),
+  `);
+      }),
     );
   await storage.put(`${prefix}/cursor`, Buffer.from(JSON.stringify({ cursor: end })));
-  if (end < batches.length) return false;
+  if (end < count) return false;
   await db
     .insert(trendIndex)
     .values({ buildId: build.id, version: VERSION })
     .onConflictDoUpdate({ target: trendIndex.buildId, set: { version: VERSION } });
+  for (let i = 0; i < count; i += 500)
+    await storage.delete(
+      Array.from({ length: Math.min(500, count - i) }, (_, n) => `${prefix}/${i + n}`),
+    );
   await storage.delete([`${prefix}/plan`, `${prefix}/cursor`]);
   return true;
 }

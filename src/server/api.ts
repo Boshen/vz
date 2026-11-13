@@ -51,7 +51,12 @@ api.onError((error, c) => {
     );
   if (error instanceof joseErrors.JOSEError)
     return c.json({ error: "Invalid or expired identity token" }, 401);
-  console.error("VZ request failed", error.name, error.message);
+  console.error(
+    "VZ request failed",
+    error.name,
+    error.message,
+    error.cause instanceof Error ? error.cause.message : "",
+  );
   return c.json({ error: "Request failed. Please retry." }, 500);
 });
 api.get("/session", (c) =>

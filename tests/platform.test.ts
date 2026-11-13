@@ -729,7 +729,7 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
   sqlite.prepare("UPDATE builds SET state = 'uploading' WHERE id = ?").run(session.id);
   sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
   sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
-  const prefix = `reports/${session.id}/.trend-index-1`;
+  const prefix = `reports/${session.id}/.trend-index-1-chunks`;
   const batches = Array.from({ length: 20 }, (_, i) => [
     {
       dataset: "modules",
@@ -738,7 +738,9 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
       metrics: { records: 1, bytes: i },
     },
   ]);
-  await memoryStorage.put(`${prefix}/plan`, gzipSync(JSON.stringify(batches)));
+  await memoryStorage.put(`${prefix}/plan`, Buffer.from(JSON.stringify({ count: batches.length })));
+  for (let i = 0; i < batches.length; i++)
+    await memoryStorage.put(`${prefix}/${i}`, gzipSync(JSON.stringify(batches[i])));
   await memoryStorage.delete(`${prefix}/cursor`);
   const finish = () => call(`/uploads/${session.id}/complete`, "POST", session.token);
   expect((await finish()).status).toBe(202);
