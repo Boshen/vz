@@ -7,13 +7,19 @@ import type { RegressionResult } from "./regressions";
 export function RegressionSummary({
   buildId,
   revision = "",
+  initial,
 }: {
   buildId: string;
   revision?: string;
+  initial?: RegressionResult | null;
 }) {
-  const [result, setResult] = useState<RegressionResult | null>(null),
+  const [result, setResult] = useState<RegressionResult | null>(initial ?? null),
     [error, setError] = useState("");
   useEffect(() => {
+    if (initial?.current.id === buildId) {
+      setResult(initial);
+      return;
+    }
     const controller = new AbortController();
     setResult(null);
     setError("");
@@ -28,7 +34,7 @@ export function RegressionSummary({
           setError(failure instanceof Error ? failure.message : "Regression check unavailable");
       });
     return () => controller.abort();
-  }, [buildId, revision]);
+  }, [buildId, revision, initial]);
   if (error)
     return (
       <p role="alert" className="mb-4 text-xs text-muted-foreground">

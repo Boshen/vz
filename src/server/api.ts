@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { DashboardInitial, History, Session, Project } from "../dashboard";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { errors as joseErrors } from "jose";
@@ -40,7 +41,9 @@ api.use("*", bodyLimit({ maxSize: 10 * 1024 ** 2 }));
 api.use("*", async (c, next) => {
   c.header("Cache-Control", "no-store");
   c.header("X-Content-Type-Options", "nosniff");
+  const start = performance.now();
   await next();
+  c.header("Server-Timing", `app;dur=${(performance.now() - start).toFixed(1)}`, { append: true });
 });
 api.onError((error, c) => {
   if (error instanceof HTTPException) return c.json({ error: error.message }, error.status);
@@ -120,6 +123,7 @@ async function report(
   id: string,
   write = false,
   includeArtifacts = true,
+  rawOnly = false,
 ): Promise<BuildRecord> {
   const [row] = await db
     .select({ build: builds, project: projects, repository: repositories })
@@ -130,11 +134,16 @@ async function report(
   if (!row) throw new HTTPException(404);
   const [repo, descriptors] = await Promise.all([
     authorizeRepository(c, row.repository.id, write, row.repository),
-    includeArtifacts
+    includeArtifacts || rawOnly
       ? db
           .select({ description: artifacts.description })
           .from(artifacts)
-          .where(eq(artifacts.buildId, id))
+          .where(
+            and(
+              eq(artifacts.buildId, id),
+              rawOnly ? sql`json_extract(${artifacts.description}, '$.kind') = 'raw'` : undefined,
+            ),
+          )
       : Promise.resolve([]),
   ]);
   return {
@@ -226,7 +235,40 @@ api.get("/projects/:id/builds", async (c) => {
     nextPage: rows.length === 20 ? page + 1 : null,
   });
 });
-api.get("/builds/:id", async (c) => c.json(await report(c.env.context, c.req.param("id"))));
+api.get("/builds/:id", async (c) =>
+  c.json(
+    await report(
+      c.env.context,
+      c.req.param("id"),
+      false,
+      c.req.query("metadata") !== "1",
+      c.req.query("metadata") === "1",
+    ),
+  ),
+);
+api.get("/builds/:id/inventory", async (c) => {
+  const id = c.req.param("id"),
+    page = pageNumber(c.req.query("page"));
+  const [, rows] = await Promise.all([
+    report(c.env.context, id, false, false),
+    db
+      .select({ description: artifacts.description })
+      .from(artifacts)
+      .where(
+        and(
+          eq(artifacts.buildId, id),
+          sql`json_extract(${artifacts.description}, '$.kind') NOT IN ('source', 'dataset')`,
+        ),
+      )
+      .orderBy(artifacts.id)
+      .limit(51)
+      .offset(page * 50),
+  ]);
+  return c.json({
+    artifacts: rows.slice(0, 50).map((row) => row.description),
+    nextPage: rows.length > 50 ? page + 1 : null,
+  });
+});
 api.get("/builds/:id/regressions", async (c) =>
   c.json(await buildRegressions(await report(c.env.context, c.req.param("id"), false, false))),
 );
@@ -333,9 +375,101 @@ api.get("/builds/:id/compare", async (c) => {
   });
 });
 api.delete("/builds/:id", async (c) => {
-  if (c.req.header("Origin") !== new URL(c.req.url).origin)
+  if (c.req.header("Origin") !== new URL(c.req.raw.url).origin)
     throw new HTTPException(403, { message: "Same-origin request required" });
   await report(c.env.context, c.req.param("id"), true, false);
   await deleteBuild(c.req.param("id"));
   return c.json({ ok: true });
 });
+
+/** Internal API calls share the original request's authorization scope, never HTTP. */
+export async function dashboardData(
+  c: CloudContext,
+  selection: { projectId?: string; reportId?: string } = {},
+): Promise<DashboardInitial> {
+  c.header("Cache-Control", "no-store");
+  const started = performance.now();
+  async function read<T>(path: string): Promise<T> {
+    const response = await api.fetch(
+      new Request(new URL(`/api/v1${path}`, c.req.raw.url), { headers: c.req.raw.headers }),
+      { context: c },
+      c.executionCtx,
+    );
+    const value = (await response.json()) as T & { error?: string };
+    if (!response.ok)
+      throw new HTTPException(response.status as 400, {
+        message: value.error ?? "Unable to load page data",
+      });
+    return value;
+  }
+  let error = "";
+  const optional = <T>(work: Promise<T>): Promise<T | null> =>
+    work.catch((failure) => {
+      error ||=
+        failure instanceof HTTPException
+          ? failure.message
+          : "Some page data could not be loaded. Please refresh.";
+      if (!(failure instanceof HTTPException))
+        console.error(
+          "Optional dashboard data unavailable",
+          failure instanceof Error ? failure.message : String(failure),
+        );
+      return null;
+    });
+  const listing = read<{ projects: Project[]; nextPage: number | null }>("/projects").catch(
+    (failure) => {
+      error ||= failure.message;
+      return { projects: [], nextPage: null };
+    },
+  );
+  const session = read<Session>("/session");
+  const selected = (async () => {
+    let history: History | null = null,
+      build: BuildRecord | null = null;
+    let trends: DashboardInitial["trends"] = null,
+      regression: DashboardInitial["regression"] = null,
+      overview: DashboardInitial["overview"] = null;
+    if (selection.reportId) {
+      build = await read<BuildRecord>(
+        `/builds/${encodeURIComponent(selection.reportId)}?metadata=1`,
+      );
+      [history, regression, overview] = await Promise.all([
+        optional(read<History>(`/projects/${build.projectId}/builds`)),
+        optional(buildRegressions(build)),
+        optional(
+          read<NonNullable<DashboardInitial["overview"]>>(`/builds/${build.id}/datasets/assets`),
+        ),
+      ]);
+    } else if (selection.projectId) {
+      history = await read<History>(`/projects/${encodeURIComponent(selection.projectId)}/builds`);
+      const environment =
+        history.builds.find((build) => build.environment === "client")?.environment ??
+        history.builds[0]?.environment ??
+        "client";
+      trends = await optional(projectTrends(c, history.project.id, { environment }));
+    }
+    return { history, report: build, trends, regression, overview };
+  })().catch((failure) => {
+    error ||= failure.message;
+    return { history: null, report: null, trends: null, regression: null, overview: null };
+  });
+  const [identity, projects, data] = await Promise.all([session, listing, selected]);
+  c.header("Server-Timing", `page-data;dur=${(performance.now() - started).toFixed(1)}`, {
+    append: true,
+  });
+  return {
+    ...data,
+    session: identity,
+    projects: projects.projects,
+    nextProjectPage: projects.nextPage,
+    error,
+  };
+}
+api.get("/dashboard", async (c) =>
+  c.json(
+    await dashboardData(c.env.context, {
+      projectId: c.req.query("projectId"),
+      reportId: c.req.query("reportId"),
+    }),
+  ),
+);

@@ -22,6 +22,7 @@ import {
 } from "../../db/schema";
 import { readArtifactJson } from "./artifact-json";
 import { uploadDb } from "./upload-db";
+import { buildRegressions } from "./regressions";
 import { authorizeRepository } from "./github";
 import {
   trendDatasets,
@@ -291,7 +292,7 @@ export async function projectTrends(
       and(eq(builds.createdAt, cursor.createdAt), lt(builds.id, cursor.id)),
     );
   }
-  const [history, environments, catalog] = await Promise.all([
+  const [history, environments] = await Promise.all([
     db
       .select({ build: builds, metrics: trendMeasurements.metrics, indexed: trendIndex.buildId })
       .from(builds)
@@ -319,27 +320,42 @@ export async function projectTrends(
           sql`json_extract(${builds.provenance}, '$.ref') = ${branch}`,
         ),
       ),
-    db
-      .selectDistinct({ id: trendMeasurements.entity, label: trendMeasurements.label })
-      .from(trendMeasurements)
-      .innerJoin(builds, eq(builds.id, trendMeasurements.buildId))
-      .innerJoin(trendIndex, eq(trendIndex.buildId, builds.id))
-      .where(
-        and(
-          condition,
-          eq(trendMeasurements.dataset, input.dataset),
-          sql`${builds.id} IN (SELECT id FROM builds WHERE ${and(condition, before)} ORDER BY created_at DESC, id DESC LIMIT ${input.limit})`,
-          sql`${trendMeasurements.entity} != ''`,
-          input.search
-            ? sql`instr(lower(${trendMeasurements.label}), ${input.search.toLowerCase()}) > 0`
-            : undefined,
-        ),
-      )
-      .orderBy(trendMeasurements.label, trendMeasurements.entity)
-      .limit(51),
     access(),
   ]);
   const selected = history.slice(0, input.limit).reverse();
+  // Each covering-index scan stops after 51 matches per build. The global
+  // first 51 distinct records must occur in these bounded candidate sets.
+  const catalogRows: { id: string; label: string }[] = [];
+  if (input.dataset !== "build" && input.dataset !== "runtime") {
+    for (let i = 0; i < selected.length; i += 30) {
+      const scans = selected
+        .slice(i, i + 30)
+        .filter(({ indexed }) => indexed)
+        .map(
+          ({ build }) => sql`
+        SELECT * FROM (SELECT entity AS id, label FROM trend_measurements INDEXED BY trend_build_dataset_label_entity
+        WHERE build_id = ${build.id} AND dataset = ${input.dataset} AND entity != ''
+        ${input.search ? sql`AND instr(lower(label), ${input.search.toLowerCase()}) > 0` : sql``}
+        ORDER BY label, entity LIMIT 51)
+      `,
+        );
+      if (scans.length)
+        catalogRows.push(
+          ...(await db.all<{ id: string; label: string }>(sql.join(scans, sql` UNION ALL `))),
+        );
+    }
+  }
+  const catalog = [
+    ...new Map(catalogRows.map((row) => [`${row.id}:${row.label}`, row])).values(),
+  ].sort(
+    (a, b) =>
+      Buffer.compare(Buffer.from(a.label), Buffer.from(b.label)) || a.id.localeCompare(b.id),
+  );
+  const latest = selected.at(-1)?.build;
+  const regression =
+    input.dataset === "build" && latest
+      ? await buildRegressions({ ...latest, environment: latest.manifest.environment })
+      : null;
   const missing = selected.filter((row) => !row.indexed);
   if (missing.length && c.executionCtx)
     c.executionCtx.waitUntil(
@@ -351,6 +367,7 @@ export async function projectTrends(
       ),
     );
   return {
+    regression,
     branch,
     environment: input.environment,
     dataset: input.dataset,

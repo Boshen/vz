@@ -110,7 +110,10 @@ export const settings = {
   GITHUB_APP_PRIVATE_KEY: "",
   GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
 };
-export const fakeContext = { req: { raw: new Request("https://vz.example") } } as CloudContext;
+export const fakeContext = {
+  header() {},
+  req: { raw: new Request("https://vz.example") },
+} as unknown as CloudContext;
 export function reset() {
   sqlite.exec(
     "DELETE FROM builds; DELETE FROM projects; DELETE FROM repositories; DELETE FROM webhook_deliveries;",

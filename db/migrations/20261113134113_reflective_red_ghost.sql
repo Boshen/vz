@@ -1,0 +1,1 @@
+CREATE INDEX `trend_build_dataset_label_entity` ON `trend_measurements` (`build_id`,`dataset`,`label`,`entity`);

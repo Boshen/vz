@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   formatTrend,
+  formatTrendDate,
   trendDatasets,
   trendMetrics,
   type TrendDataset,
@@ -44,7 +45,10 @@ function SeriesChart({
   const titleId = useId();
   const container = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(600);
+  // Served HTML omits SVG titles; add native tooltips only after hydration.
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
+    setHydrated(true);
     if (!container.current) return;
     const observer = new ResizeObserver(([entry]) =>
       setChartWidth(Math.max(280, Math.round(entry.contentRect.width))),
@@ -106,7 +110,8 @@ function SeriesChart({
     connected = true;
   }
   const timeLabel = (time: number) =>
-    new Date(time).toLocaleString(undefined, {
+    new Date(time).toLocaleString("en-US", {
+      timeZone: "UTC",
       month: "short",
       day: "numeric",
       ...(lastTime - firstTime < 172800000 ? { hour: "2-digit", minute: "2-digit" } : {}),
@@ -138,9 +143,11 @@ function SeriesChart({
             role="group"
             aria-labelledby={titleId}
           >
-            <title>
-              {metric.label} across {points.length} uploaded builds
-            </title>
+            {hydrated && (
+              <title>
+                {metric.label} across {points.length} uploaded builds
+              </title>
+            )}
             {[0, 1, 2].map((tick) => {
               const value = low + ((high - low) * tick) / 2,
                 at = y(value);
@@ -171,17 +178,19 @@ function SeriesChart({
               <a
                 key={point.id}
                 href={reportLink(point, dataset)}
-                aria-label={`${point.provenance.sha.slice(0, 7)}: ${formatTrend(value!, metric.unit)}, ${new Date(point.createdAt).toLocaleString()}`}
+                aria-label={`${point.provenance.sha.slice(0, 7)}: ${formatTrend(value!, metric.unit)}, ${formatTrendDate(point.createdAt)}`}
                 onFocus={() => setFocused(index)}
                 onBlur={() => setFocused(null)}
                 onMouseEnter={() => setFocused(index)}
                 onMouseLeave={() => setFocused(null)}
               >
-                <title>
-                  {regressions.has(point.id) ? "Regression · " : ""}
-                  {point.provenance.sha.slice(0, 7)} · {formatTrend(value!, metric.unit)} ·{" "}
-                  {new Date(point.createdAt).toLocaleString()}
-                </title>
+                {hydrated && (
+                  <title>
+                    {regressions.has(point.id) ? "Regression · " : ""}
+                    {point.provenance.sha.slice(0, 7)} · {formatTrend(value!, metric.unit)} ·{" "}
+                    {formatTrendDate(point.createdAt)}
+                  </title>
+                )}
                 <circle cx={x(point)} cy={y(value!)} r="8" fill="transparent" />
                 <circle
                   cx={x(point)}
@@ -244,18 +253,25 @@ function SeriesChart({
   );
 }
 
-export function ProjectTrends({ projectId }: { projectId: string }) {
+export function ProjectTrends({
+  projectId,
+  initial,
+}: {
+  projectId: string;
+  initial?: TrendResponse | null;
+}) {
+  const initialPending = useRef(!!initial);
   const [dataset, setDataset] = useState<TrendDataset>("build"),
     [entity, setEntity] = useState("");
   const [metric, setMetric] = useState(trendMetrics.build[0].key);
-  const [environment, setEnvironment] = useState("client");
+  const [environment, setEnvironment] = useState(initial?.environment ?? "client");
   const [branch, setBranch] = useState("main"),
     [branchDraft, setBranchDraft] = useState("main");
   const [search, setSearch] = useState(""),
     [debouncedSearch, setDebouncedSearch] = useState("");
-  const [response, setResponse] = useState<TrendResponse | null>(null);
+  const [response, setResponse] = useState<TrendResponse | null>(initial ?? null);
   const [error, setError] = useState(""),
-    [loading, setLoading] = useState(true),
+    [loading, setLoading] = useState(!initial),
     [refresh, setRefresh] = useState(0),
     [requestWindows, setRequestWindows] = useState<{ key: string; cursors: string[] }>({
       key: "",
@@ -324,9 +340,13 @@ export function ProjectTrends({ projectId }: { projectId: string }) {
         if (!controller.signal.aborted) setLoading(false);
       }
     };
-    setLoading(true);
-    setResponse(null);
-    void load();
+    const hydrated = initialPending.current;
+    initialPending.current = false;
+    if (!hydrated) {
+      setLoading(true);
+      setResponse(null);
+      void load();
+    }
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void load();
     }, 15000);
@@ -433,6 +453,7 @@ export function ProjectTrends({ projectId }: { projectId: string }) {
             <RegressionSummary
               buildId={points.at(-1)!.id}
               revision={points.map((point) => point.id).join(",")}
+              initial={response?.regression}
             />
           )}
           {dataset === "build" ? (
@@ -556,7 +577,7 @@ export function ProjectTrends({ projectId }: { projectId: string }) {
                           {point.provenance.sha.slice(0, 7)}
                         </a>
                       </td>
-                      <td>{new Date(point.createdAt).toLocaleString()}</td>
+                      <td>{formatTrendDate(point.createdAt)}</td>
                       <td>
                         {point.values?.[selectedMetric.key] === undefined
                           ? "—"

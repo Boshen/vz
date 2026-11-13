@@ -111,18 +111,21 @@ the local suite uses signed test JWTs, SQLite, and an in-memory R2 adapter.
 
 All platform routes are under `/api/v1`:
 
-| Method | Route                                          | Authorization                                          |
-| ------ | ---------------------------------------------- | ------------------------------------------------------ |
-| POST   | `/uploads`                                     | GitHub Actions OIDC                                    |
-| PUT    | `/uploads/:id/artifacts/:artifact/parts/:part` | Scoped, expiring upload token                          |
-| POST   | `/uploads/:id/artifacts/:artifact/complete`    | Scoped upload token                                    |
-| POST   | `/uploads/:id/complete`                        | Scoped upload token                                    |
-| GET    | `/projects`, `/projects/:id/builds`            | Current repository visibility/access                   |
-| GET    | `/builds/:id`                                  | Current repository visibility/access                   |
-| GET    | `/builds/:id/datasets/:dataset?page=0`         | Current repository visibility/access                   |
-| GET    | `/builds/:id/artifacts/:artifact`              | Current repository visibility/access                   |
-| GET    | `/builds/:id/compare?before=<build-id>`        | Access to both reports                                 |
-| DELETE | `/builds/:id`                                  | GitHub repository write access and same-origin request |
+| Method | Route                                           | Authorization                                                    |
+| ------ | ----------------------------------------------- | ---------------------------------------------------------------- |
+| POST   | `/uploads`                                      | GitHub Actions OIDC                                              |
+| PUT    | `/uploads/:id/artifacts/:artifact/parts/:part`  | Scoped, expiring upload token                                    |
+| POST   | `/uploads/:id/artifacts/:artifact/complete`     | Scoped upload token                                              |
+| POST   | `/uploads/:id/complete`                         | Scoped upload token                                              |
+| GET    | `/projects`, `/projects/:id/builds`             | Current repository visibility/access                             |
+| GET    | `/dashboard?projectId=<id>` or `?reportId=<id>` | Request-scoped repository checks for initial page data           |
+| GET    | `/builds/:id?metadata=1`                        | Current repository visibility/access; small report metadata      |
+| GET    | `/builds/:id/inventory?page=0`                  | Current repository visibility/access; 50 captured files per page |
+| GET    | `/builds/:id`                                   | Current repository visibility/access                             |
+| GET    | `/builds/:id/datasets/:dataset?page=0`          | Current repository visibility/access                             |
+| GET    | `/builds/:id/artifacts/:artifact`               | Current repository visibility/access                             |
+| GET    | `/builds/:id/compare?before=<build-id>`         | Access to both reports                                           |
+| DELETE | `/builds/:id`                                   | GitHub repository write access and same-origin request           |
 
 OIDC signatures, issuer, audience, expiration, immutable repo/owner IDs, and app
 installation are verified before accepting a capture. Repository identity and
@@ -203,3 +206,17 @@ baseline and measured deltas; amber size/timing points mark historical regressio
 `GET /api/v1/builds/:id/regressions` applies normal current repository authorization.
 The main workflow writes report links/statuses to its job summary and emits GitHub
 warning annotations for flagged metrics. Threshold violations do not fail CI.
+
+## Page loading
+
+Void server loaders render initial project history, charts, regression status, and
+report overview data into the first response. Hydration reuses those values. The
+client fallback uses the same `/api/v1/dashboard` bootstrap; internal requests share
+one fresh authorization result per repository, without caching access decisions
+between requests. Responses use `Cache-Control: no-store`.
+
+Report pages request metadata and raw-download descriptors only. Expanding captured
+files loads a 50-file inventory page; the original full-report API remains available.
+Record selectors use a covering `(build_id, dataset, label, entity)` index and at
+most 51 candidates per build, avoiding full-catalog sorts. `Server-Timing` exposes
+application, page-data, and authorization duration for future latency diagnosis.

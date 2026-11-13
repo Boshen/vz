@@ -1,3 +1,5 @@
+import type { DashboardInitial } from "../src/dashboard";
+import type { BuildRecord, ArtifactManifest } from "@vz/protocol";
 import { beforeAll, beforeEach, afterAll, expect, test, vi } from "vitest";
 import { createHash, createHmac } from "node:crypto";
 import { Hono } from "hono";
@@ -559,6 +561,7 @@ test("trend pagination is stable for equal timestamps and rejects cross-project 
 test("historical backfill is idempotent and chart reads never fetch R2", async () => {
   const session = await trendBuild(42);
   sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
+  expect((await trends(session.projectId, "dataset=modules")).entities).toEqual([]);
   sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
   const before = await trends(session.projectId, "dataset=modules");
   expect(before.pending).toBe(1);
@@ -850,4 +853,120 @@ test("large upload setup stores every descriptor and preserves receipts on retry
   expect(JSON.parse(rows.find((row) => row.id === "source-400")!.description as string)).toEqual(
     data.artifacts[400],
   );
+});
+
+test("page bootstrap shares fresh authorization and includes initial charts and regressions", async () => {
+  const build = await trendBuild(42);
+  state.requests.length = 0;
+  const response = await call(`/dashboard?projectId=${build.projectId}`);
+  expect(response.status).toBe(200);
+  const data = (await response.json()) as DashboardInitial;
+  expect(data.error).toBe("");
+  expect(data.history!.builds[0].id).toBe(build.id);
+  expect(data.trends!.points[0].id).toBe(build.id);
+  expect(data.trends!.regression!.status).toBe("baseline");
+  expect(state.requests.filter((url) => url.endsWith("/repositories/42"))).toHaveLength(1);
+  state.private = true;
+  const denied = (await (
+    await call(`/dashboard?projectId=${build.projectId}`)
+  ).json()) as DashboardInitial;
+  expect(denied.history).toBeNull();
+  expect(denied.trends).toBeNull();
+  expect(denied.projects).toEqual([]);
+  expect(denied.error).toContain("Sign in");
+});
+
+test("record catalogs use a covering index and retain bounded, searchable window results", async () => {
+  const build = await trendBuild(42);
+  const insert = sqlite.prepare(
+    "INSERT INTO trend_measurements (build_id,dataset,entity,label,metrics) VALUES (?, 'modules', ?, ?, '{}')",
+  );
+  for (let i = 0; i < 2000; i++)
+    insert.run(
+      build.id,
+      createHash("sha256").update(String(i)).digest("hex"),
+      `src/z-${String(i).padStart(5, "0")}`,
+    );
+  const plan = sqlite
+    .prepare(
+      "EXPLAIN QUERY PLAN SELECT entity, label FROM trend_measurements INDEXED BY trend_build_dataset_label_entity WHERE build_id = ? AND dataset = 'modules' AND entity != '' ORDER BY label,entity LIMIT 51",
+    )
+    .all(build.id);
+  expect(JSON.stringify(plan)).toContain("COVERING INDEX trend_build_dataset_label_entity");
+  expect(JSON.stringify(plan)).not.toContain("TEMP B-TREE");
+  const catalog = await trends(build.projectId, "dataset=modules");
+  expect(catalog.entities).toHaveLength(50);
+  expect(catalog.moreEntities).toBe(true);
+  const found = await trends(build.projectId, "dataset=modules&search=z-01999");
+  expect(found.entities.map((row) => row.label)).toEqual(["src/z-01999"]);
+});
+
+test("report metadata is lightweight and inventories are paginated behind fresh access checks", async () => {
+  const data = manifest();
+  data.artifacts = Array.from({ length: 53 }, (_, i) => ({
+    id: `output-${String(i).padStart(3, "0")}`,
+    kind: i === 0 ? "raw" : "output",
+    name: `file-${i}`,
+    bytes: Buffer.byteLength(contents),
+    sha256: createHash("sha256").update(contents).digest("hex"),
+    contentType: "text/plain",
+  }));
+  const build = await create(data);
+  const batch = data.artifacts.map((artifact) => ({
+    id: artifact.id,
+    content: Buffer.from(contents).toString("base64"),
+  }));
+  for (let i = 0; i < batch.length; i += 32)
+    expect(
+      (
+        await call(
+          `/uploads/${build.id}/artifacts/batch`,
+          "POST",
+          build.token,
+          JSON.stringify(batch.slice(i, i + 32)),
+        )
+      ).status,
+    ).toBe(200);
+  expect((await call(`/uploads/${build.id}/complete`, "POST", build.token)).status).toBe(200);
+  const metadata = (await (await call(`/builds/${build.id}?metadata=1`)).json()) as BuildRecord;
+  expect(metadata.manifest.artifacts).toHaveLength(1);
+  expect(metadata.manifest.artifacts[0].kind).toBe("raw");
+  const page = (await (await call(`/builds/${build.id}/inventory`)).json()) as {
+    artifacts: ArtifactManifest[];
+    nextPage: number | null;
+  };
+  expect(page.artifacts).toHaveLength(50);
+  expect(page.nextPage).toBe(1);
+  const last = (await (await call(`/builds/${build.id}/inventory?page=1`)).json()) as {
+    artifacts: ArtifactManifest[];
+    nextPage: number | null;
+  };
+  expect(last.artifacts).toHaveLength(3);
+  expect(last.nextPage).toBeNull();
+  const bootstrap = (await (
+    await call(`/dashboard?reportId=${build.id}`)
+  ).json()) as DashboardInitial;
+  expect(bootstrap.report!.manifest.artifacts).toHaveLength(1);
+  expect(bootstrap.regression!.status).toBe("baseline");
+  state.private = true;
+  expect((await call(`/builds/${build.id}/inventory`)).status).toBe(401);
+});
+
+test("optional chart failures preserve authorized project history in initial page data", async () => {
+  const build = await trendBuild(42);
+  const prepare = d1.prepare.bind(d1);
+  const failed = vi.spyOn(d1, "prepare").mockImplementation((query) => {
+    if (query.includes("trend_measurements")) throw new Error("D1 network connection lost");
+    return prepare(query);
+  });
+  try {
+    const data = (await (
+      await call(`/dashboard?projectId=${build.projectId}`)
+    ).json()) as DashboardInitial;
+    expect(data.history!.builds[0].id).toBe(build.id);
+    expect(data.trends).toBeNull();
+    expect(data.error).not.toBe("");
+  } finally {
+    failed.mockRestore();
+  }
 });

@@ -146,7 +146,12 @@ export function authorizeRepository(
   const key = `${id}:${write}`;
   let result = access.get(key);
   if (!result) {
-    result = checkRepository(c, id, write, known);
+    const start = performance.now();
+    result = checkRepository(c, id, write, known).finally(() =>
+      c.header("Server-Timing", `authorization;dur=${(performance.now() - start).toFixed(1)}`, {
+        append: true,
+      }),
+    );
     access.set(key, result);
   }
   return result;

@@ -1,6 +1,5 @@
-import { useParams } from "@void/react";
 import { Dashboard } from "../../src/dashboard";
-export default function ProjectPage() {
-  const { id } = useParams<"/projects/[id]">();
-  return <Dashboard projectId={id} />;
+import type { Props } from "./[id].server";
+export default function Page(props: Props) {
+  return <Dashboard key={props.projectId} {...props} />;
 }

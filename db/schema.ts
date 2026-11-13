@@ -95,5 +95,11 @@ export const trendMeasurements = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.buildId, table.dataset, table.entity] }),
     index("trend_dataset_entity_build").on(table.dataset, table.entity, table.buildId),
+    index("trend_build_dataset_label_entity").on(
+      table.buildId,
+      table.dataset,
+      table.label,
+      table.entity,
+    ),
   ],
 );

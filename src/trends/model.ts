@@ -112,6 +112,7 @@ export interface TrendPoint {
   indexed: boolean;
 }
 export interface TrendResponse {
+  regression?: import("../regressions").RegressionResult | null;
   branch: string;
   environment: string;
   environments: string[];
@@ -128,8 +129,11 @@ export function formatTrend(value: number, unit: TrendMetric["unit"]) {
       ? `${(value / 1048576).toFixed(2)} MB`
       : Math.abs(value) >= 1024
         ? `${(value / 1024).toFixed(1)} kB`
-        : `${value.toLocaleString()} B`;
+        : `${value.toLocaleString("en-US")} B`;
   if (unit === "ms")
     return Math.abs(value) >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(1)} ms`;
-  return value.toLocaleString();
+  return value.toLocaleString("en-US");
 }
+
+export const formatTrendDate = (value: number) =>
+  `${new Date(value).toISOString().slice(0, 19).replace("T", " ")} UTC`;

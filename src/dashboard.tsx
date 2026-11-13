@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { auth } from "void/client";
 import {
   datasets,
@@ -6,6 +6,7 @@ import {
   type BuildSummary,
   type Dataset,
   type DiagnosticRow,
+  type ArtifactManifest,
   type Provenance,
 } from "@vz/protocol";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -25,9 +26,10 @@ import {
 } from "lucide-react";
 import { RegressionSummary } from "./regression-summary";
 import { ProjectTrends } from "./trends/project-trends";
+import { formatTrendDate } from "./trends/model";
 import "../pages/style.css";
 
-interface Project {
+export interface Project {
   id: string;
   key: string;
   repository: string;
@@ -40,15 +42,26 @@ interface BuildListItem {
   summary: BuildSummary;
   provenance: Provenance;
 }
-interface History {
+export interface History {
   project: Project;
   builds: BuildListItem[];
   nextPage: number | null;
 }
-interface Session {
+export interface Session {
   authConfigured?: boolean;
   user: { name: string; image?: string | null } | null;
   appSlug: string | null;
+}
+export interface DashboardInitial {
+  session: Session;
+  projects: Project[];
+  nextProjectPage: number | null;
+  history: History | null;
+  report: BuildRecord | null;
+  trends: import("./trends/model").TrendResponse | null;
+  regression: import("./regressions").RegressionResult | null;
+  error: string;
+  overview: { rows: DiagnosticRow[]; pages: number } | null;
 }
 type Comparison = {
   before: string | null;
@@ -74,7 +87,7 @@ const bytes = (n: number) =>
   `${n < 0 ? "−" : ""}${Math.abs(n) >= 1024 ** 2 ? `${(Math.abs(n) / 1024 ** 2).toFixed(2)} MB` : Math.abs(n) >= 1024 ? `${(Math.abs(n) / 1024).toFixed(1)} kB` : `${Math.abs(n)} B`}`;
 const time = (n: number) =>
   Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(2)} s` : `${n.toFixed(1)} ms`;
-const date = (n: number) => new Date(n).toLocaleString();
+const date = formatTrendDate;
 function Notice({ children, error = false }: { children: ReactNode; error?: boolean }) {
   return (
     <div role={error ? "alert" : "status"} className={`notice ${error ? "error" : ""}`}>
@@ -92,56 +105,53 @@ function Metric({ name, value, hint }: { name: string; value: string | number; h
   );
 }
 
-export function Dashboard({ projectId, reportId }: { projectId?: string; reportId?: string }) {
-  const [session, setSession] = useState<Session>({ user: null, appSlug: null });
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [nextProjectPage, setNextProjectPage] = useState<number | null>(null);
-  const [history, setHistory] = useState<History | null>(null);
-  const [report, setReport] = useState<BuildRecord | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+export function Dashboard({
+  projectId,
+  reportId,
+  initial,
+}: {
+  projectId?: string;
+  reportId?: string;
+  initial?: DashboardInitial;
+}) {
+  const [bootstrap, setBootstrap] = useState(initial);
+  const [session, setSession] = useState<Session>(
+    initial?.session ?? { user: null, appSlug: null },
+  );
+  const [projects, setProjects] = useState<Project[]>(initial?.projects ?? []);
+  const [nextProjectPage, setNextProjectPage] = useState<number | null>(
+    initial?.nextProjectPage ?? null,
+  );
+  const [history, setHistory] = useState<History | null>(initial?.history ?? null);
+  const [report, setReport] = useState<BuildRecord | null>(initial?.report ?? null);
+  const [error, setError] = useState(initial?.error ?? "");
+  const [loading, setLoading] = useState(!initial);
   const [projectFilter, setProjectFilter] = useState("");
   useEffect(() => {
+    if (initial) return;
     const controller = new AbortController();
-    const handleError = (failure: unknown) => {
-      if (!controller.signal.aborted)
-        setError(failure instanceof Error ? failure.message : "Unable to load dashboard");
-    };
-    // Sidebar and identity should not block the selected report.
-    void api<Session>("/session", controller.signal).then(setSession).catch(handleError);
-    void api<{ projects: Project[]; nextPage: number | null }>("/projects", controller.signal)
-      .then((listing) => {
-        setProjects(listing.projects);
-        setNextProjectPage(listing.nextPage);
-        if (!projectId && !reportId) setLoading(false);
+    const query = new URLSearchParams({
+      ...(projectId ? { projectId } : {}),
+      ...(reportId ? { reportId } : {}),
+    });
+    void api<DashboardInitial>(`/dashboard?${query}`, controller.signal)
+      .then((data) => {
+        setBootstrap(data);
+        setSession(data.session);
+        setProjects(data.projects);
+        setNextProjectPage(data.nextProjectPage);
+        setHistory(data.history);
+        setReport(data.report);
+        setError(data.error);
       })
-      .catch((failure: unknown) => {
-        handleError(failure);
-        if (!projectId && !reportId && !controller.signal.aborted) setLoading(false);
+      .catch((failure) => {
+        if (!controller.signal.aborted) setError(failure.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
-    if (reportId) {
-      void api<BuildRecord>(`/builds/${reportId}`, controller.signal)
-        .then((build) => {
-          setReport(build);
-          setLoading(false);
-          return api<History>(`/projects/${build.projectId}/builds`, controller.signal).then(
-            setHistory,
-          );
-        })
-        .catch(handleError)
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false);
-        });
-    } else if (projectId) {
-      void api<History>(`/projects/${projectId}/builds`, controller.signal)
-        .then(setHistory)
-        .catch(handleError)
-        .finally(() => {
-          if (!controller.signal.aborted) setLoading(false);
-        });
-    }
     return () => controller.abort();
-  }, [projectId, reportId]);
+  }, [projectId, reportId, initial]);
   async function loadProjects() {
     try {
       const result = await api<{ projects: Project[]; nextPage: number | null }>(
@@ -267,7 +277,13 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
               </div>
             </div>
           ) : report ? (
-            <Report report={report} builds={history?.builds ?? []} onError={setError} />
+            <Report
+              report={report}
+              builds={history?.builds ?? []}
+              onError={setError}
+              regression={bootstrap?.regression}
+              overview={bootstrap?.overview}
+            />
           ) : history ? (
             <>
               <div className="eyebrow">
@@ -283,7 +299,7 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                   Configure uploads ↗
                 </a>
               </div>
-              <ProjectTrends projectId={history.project.id} />
+              <ProjectTrends projectId={history.project.id} initial={bootstrap?.trends} />
               <BuildHistory builds={history.builds} />
               {history.nextPage !== null && (
                 <Button
@@ -444,22 +460,28 @@ function BuildHistory({ builds }: { builds: BuildListItem[] }) {
 }
 
 function Report({
+  overview,
+  regression,
   report,
   builds,
   onError,
 }: {
+  overview?: DashboardInitial["overview"];
+  regression?: import("./regressions").RegressionResult | null;
   report: BuildRecord;
   builds: BuildListItem[];
   onError: (message: string) => void;
 }) {
+  const initialOverview = useRef(!!overview);
   const [tab, setTab] = useState<string>("overview");
   const [selected, setSelected] = useState<DiagnosticRow | null>(null);
-  const [rows, setRows] = useState<DiagnosticRow[]>([]);
+  const [rows, setRows] = useState<DiagnosticRow[]>(overview?.rows ?? []);
   const [page, setPage] = useState(0),
-    [pages, setPages] = useState(0);
+    [pages, setPages] = useState(overview?.pages ?? 0);
   const [rowPage, setRowPage] = useState(0);
   const [loading, setLoading] = useState(false),
     [query, setQuery] = useState("");
+  const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparison, setComparison] = useState<Comparison | null>(null),
     [baseline, setBaseline] = useState("");
   const [compareDataset, setCompareDataset] = useState<Dataset>("modules");
@@ -471,6 +493,10 @@ function Report({
   const dataset = tab === "overview" ? "assets" : tab;
   useEffect(() => {
     if (!(datasets as readonly string[]).includes(dataset)) return;
+    if (initialOverview.current) {
+      initialOverview.current = false;
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     setRows([]);
@@ -493,6 +519,8 @@ function Report({
     return () => controller.abort();
   }, [dataset, page, report.id, onError]);
   useEffect(() => {
+    if (tab !== "compare") return;
+    setComparisonLoading(true);
     const controller = new AbortController();
     void api<Comparison>(
       `/builds/${report.id}/compare${baseline ? `?before=${baseline}` : ""}`,
@@ -501,9 +529,12 @@ function Report({
       .then(setComparison)
       .catch((error: Error) => {
         if (!controller.signal.aborted) onError(error.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setComparisonLoading(false);
       });
     return () => controller.abort();
-  }, [baseline, report.id, onError]);
+  }, [tab, baseline, report.id, onError]);
   useEffect(() => {
     if (tab !== "compare" || !comparison?.before) return;
     const controller = new AbortController();
@@ -586,7 +617,7 @@ function Report({
           GitHub workflow ↗
         </a>
       </div>
-      <RegressionSummary buildId={report.id} />
+      <RegressionSummary buildId={report.id} initial={regression} />
       <div className="metrics-grid">
         <Metric
           name="TOTAL OUTPUT"
@@ -600,12 +631,12 @@ function Report({
         />
         <Metric
           name="MODULES"
-          value={summary.modules.toLocaleString()}
+          value={summary.modules.toLocaleString("en-US")}
           hint={`${summary.chunks} chunks`}
         />
         <Metric
           name="PACKAGES"
-          value={summary.packages.toLocaleString()}
+          value={summary.packages.toLocaleString("en-US")}
           hint="From the Rolldown package graph"
         />
       </div>
@@ -650,7 +681,9 @@ function Report({
                     ))}
                 </select>
               </div>
-              {comparison?.metrics ? (
+              {comparisonLoading ? (
+                <Notice>Loading comparison…</Notice>
+              ) : comparison?.metrics ? (
                 <>
                   <div className="panel table-scroll">
                     <table>
@@ -851,15 +884,34 @@ function Report({
   );
 }
 function CapturedArtifacts({ report }: { report: BuildRecord }) {
-  const [limit, setLimit] = useState(50);
-  const files = report.manifest.artifacts.filter(
-    (artifact) => artifact.kind !== "source" && artifact.kind !== "dataset",
-  );
+  const [files, setFiles] = useState<ArtifactManifest[]>([]);
+  const [nextPage, setNextPage] = useState<number | null>(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  async function load() {
+    if (loading || nextPage === null) return;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api<{ artifacts: ArtifactManifest[]; nextPage: number | null }>(
+        `/builds/${report.id}/inventory?page=${nextPage}`,
+      );
+      setFiles((old) => [...old, ...result.artifacts]);
+      setNextPage(result.nextPage);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Unable to load files");
+    } finally {
+      setLoading(false);
+    }
+  }
   return (
-    <details className="panel mt-6 overflow-hidden">
-      <summary className="cursor-pointer px-5 py-4 text-sm font-medium">
-        Captured files <span className="ml-2 text-muted-foreground">{files.length}</span>
-      </summary>
+    <details
+      className="panel mt-6 overflow-hidden"
+      onToggle={(event) => {
+        if (event.currentTarget.open && files.length === 0 && nextPage === 0) void load();
+      }}
+    >
+      <summary className="cursor-pointer px-5 py-4 text-sm font-medium">Captured files</summary>
       <div className="table-scroll max-h-96 overflow-auto">
         <table>
           <thead>
@@ -871,7 +923,7 @@ function CapturedArtifacts({ report }: { report: BuildRecord }) {
             </tr>
           </thead>
           <tbody>
-            {files.slice(0, limit).map((file) => (
+            {files.map((file) => (
               <tr key={file.id}>
                 <td title={file.id}>{file.name ?? file.id}</td>
                 <td>{file.kind}</td>
@@ -889,9 +941,16 @@ function CapturedArtifacts({ report }: { report: BuildRecord }) {
           </tbody>
         </table>
       </div>
-      {files.length > limit && (
-        <Button className="m-4" variant="outline" size="sm" onClick={() => setLimit(limit + 50)}>
-          Show more files
+      {error && <Notice error>{error}</Notice>}
+      {nextPage !== null && (
+        <Button
+          className="m-4"
+          variant="outline"
+          size="sm"
+          disabled={loading}
+          onClick={() => void load()}
+        >
+          {loading ? "Loading…" : error ? "Retry" : "Show more files"}
         </Button>
       )}
     </details>
