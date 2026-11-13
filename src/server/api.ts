@@ -100,13 +100,15 @@ async function report(
     .innerJoin(repositories, eq(repositories.id, projects.repositoryId))
     .where(and(eq(builds.id, id), eq(builds.state, "ready")));
   if (!row) throw new HTTPException(404);
-  const repo = await authorizeRepository(c, row.repository.id, write, row.repository);
-  const descriptors = includeArtifacts
-    ? await db
-        .select({ description: artifacts.description })
-        .from(artifacts)
-        .where(eq(artifacts.buildId, id))
-    : [];
+  const [repo, descriptors] = await Promise.all([
+    authorizeRepository(c, row.repository.id, write, row.repository),
+    includeArtifacts
+      ? db
+          .select({ description: artifacts.description })
+          .from(artifacts)
+          .where(eq(artifacts.buildId, id))
+      : Promise.resolve([]),
+  ]);
   return {
     id: row.build.id,
     projectId: row.project.id,
@@ -163,20 +165,24 @@ api.get("/projects", async (c) => {
   });
 });
 api.get("/projects/:id/builds", async (c) => {
-  const [project] = await db
-    .select()
+  const [row] = await db
+    .select({ project: projects, repository: repositories })
     .from(projects)
+    .innerJoin(repositories, eq(repositories.id, projects.repositoryId))
     .where(eq(projects.id, c.req.param("id")));
-  if (!project) throw new HTTPException(404);
-  const repo = await authorizeRepository(c.env.context, project.repositoryId);
+  if (!row) throw new HTTPException(404);
+  const { project } = row;
   const page = pageNumber(c.req.query("page"));
-  const rows = await db
-    .select()
-    .from(builds)
-    .where(and(eq(builds.projectId, project.id), eq(builds.state, "ready")))
-    .orderBy(desc(builds.createdAt))
-    .limit(20)
-    .offset(page * 20);
+  const [repo, rows] = await Promise.all([
+    authorizeRepository(c.env.context, project.repositoryId, false, row.repository),
+    db
+      .select()
+      .from(builds)
+      .where(and(eq(builds.projectId, project.id), eq(builds.state, "ready")))
+      .orderBy(desc(builds.createdAt))
+      .limit(20)
+      .offset(page * 20),
+  ]);
   return c.json({
     project: { ...project, repository: repo.full_name, private: repo.private },
     builds: rows.map((build) => ({
@@ -191,15 +197,16 @@ api.get("/projects/:id/builds", async (c) => {
 });
 api.get("/builds/:id", async (c) => c.json(await report(c.env.context, c.req.param("id"))));
 api.get("/builds/:id/datasets/:dataset", async (c) => {
-  const build = await report(c.env.context, c.req.param("id"), false, false);
+  const id = c.req.param("id");
   const dataset = datasetSchema.parse(c.req.param("dataset")),
     page = pageNumber(c.req.query("page"));
   const condition = and(
-    eq(artifacts.buildId, build.id),
+    eq(artifacts.buildId, id),
     sql`json_extract(${artifacts.description}, '$.kind') = 'dataset'`,
     sql`json_extract(${artifacts.description}, '$.dataset') = ${dataset}`,
   );
-  const [[total], [record]] = await Promise.all([
+  const [build, [total], [record]] = await Promise.all([
+    report(c.env.context, id, false, false),
     db.select({ value: count() }).from(artifacts).where(condition),
     db
       .select()
