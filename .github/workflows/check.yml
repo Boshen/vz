@@ -5,6 +5,10 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,4 +19,8 @@ jobs:
       - run: vp check --deny-warnings
       - run: vp test --config vitest.config.ts
       - run: vp run pack:plugin
-      - run: vp -C . build
+      - name: Build and capture main diagnostics
+        run: vp -C . build
+        env:
+          VZ_UPLOAD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          VZ_ENDPOINT: https://vz.void.app

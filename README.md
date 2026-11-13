@@ -173,3 +173,10 @@ Deleting a report also deletes its indexed measurements.
 An enabled plugin in a workflow triggered by `push` to `main` automatically adds
 points after successful uploads. `Boshen/vz-test` provides that live fixture and
 verifies the resulting series. No additional chart-upload credentials are needed.
+
+VZ also tracks itself: pushes to this repository's `main` upload the complete
+platform build to the `vz` project at `https://vz.void.app`, with client and Worker
+environments separated. The workflow grants OIDC only to its build job and enables
+capture only for main-branch pushes; pull-request and local builds do not upload.
+Small artifacts use checksum-verified batches when the platform advertises support;
+large artifacts retain resumable multipart uploads.
