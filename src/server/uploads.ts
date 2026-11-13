@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, asc, isNull, or, lt, inArray } from "void/db";
+import { and, eq, asc, isNull, or, lt, inArray, sql } from "void/db";
 import { uploadDb } from "./upload-db";
 import { storage } from "void/storage";
 import { env } from "void/env";
@@ -287,11 +287,14 @@ export async function completeArtifact(buildId: string, id: string) {
 export async function completeBuild(build: typeof builds.$inferSelect) {
   const db = uploadDb();
   if (build.state === "ready") return true;
-  const records = await db.select().from(artifacts).where(eq(artifacts.buildId, build.id));
-  if (
-    records.length !== build.artifactCount ||
-    records.some((artifact) => artifact.state !== "ready")
-  )
+  const [receipts] = await db
+    .select({
+      count: sql<number>`count(*)`,
+      pending: sql<number>`sum(case when ${artifacts.state} != 'ready' then 1 else 0 end)`,
+    })
+    .from(artifacts)
+    .where(eq(artifacts.buildId, build.id));
+  if (receipts.count !== build.artifactCount || receipts.pending)
     throw new HTTPException(409, { message: "Upload is incomplete" });
   const [project] = await db.select().from(projects).where(eq(projects.id, build.projectId));
   const [repo] = await db
@@ -299,13 +302,7 @@ export async function completeBuild(build: typeof builds.$inferSelect) {
     .from(repositories)
     .where(eq(repositories.id, project.repositoryId));
   await refreshRepository(repo.id, repo.installationId);
-  if (
-    !(await indexBuild(
-      build,
-      records.map((record) => record.description),
-    ))
-  )
-    return false;
+  if (!(await indexBuild(build))) return false;
   await db
     .update(builds)
     .set({ state: "ready" })
