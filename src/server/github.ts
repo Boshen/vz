@@ -18,7 +18,7 @@ interface GitHubRepository {
 export async function github<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`https://api.github.com${path}`, {
     ...init,
-    redirect: "error",
+    redirect: "manual",
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
