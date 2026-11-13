@@ -74,3 +74,8 @@ Large normalized records are stored as compressed JSON sidecars and linked from
 bounded dataset pages. Nothing is truncated to fit a page. The report's **Captured
 files** section exposes output files, maps, snapshots, and full-record downloads.
 The normal multipart, checksum, authorization, and retention rules apply to all files.
+
+Dataset pages are gzip-compressed in plugin 0.3.1+, while their decoded JSON remains
+bounded to 512 KiB. Platforms transparently decode old plain JSON and new compressed
+pages. Small verified artifacts use negotiated batches; large objects still use
+multipart uploads. Completion retries tolerate transient part-receipt conflicts.

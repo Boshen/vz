@@ -180,3 +180,24 @@ environments separated. The workflow grants OIDC only to its build job and enabl
 capture only for main-branch pushes; pull-request and local builds do not upload.
 Small artifacts use checksum-verified batches when the platform advertises support;
 large artifacts retain resumable multipart uploads.
+
+## Regression detection
+
+Main reports compare output size and build duration with the preceding completed
+capture from a different main commit in the same project and environment. Ordering
+uses capture timestamps, with build IDs breaking ties; this is upload history, not
+Git ancestry. Reruns of the current commit are excluded from baseline selection.
+Feature branches and other projects/environments cannot supply a baseline.
+
+A warning requires both thresholds:
+
+- Output size: at least 5% growth and at least 10 KiB (10,240 bytes).
+- Build duration: at least 20% growth and at least 100 ms.
+
+A zero baseline uses the absolute floor. The first main commit establishes a
+baseline. Improvements and increases below either floor do not trigger warnings.
+Policies live in `src/regressions.ts`. The report and project dashboard show the
+baseline and measured deltas; amber size/timing points mark historical regressions.
+`GET /api/v1/builds/:id/regressions` applies normal current repository authorization.
+The main workflow writes report links/statuses to its job summary and emits GitHub
+warning annotations for flagged metrics. Threshold violations do not fail CI.

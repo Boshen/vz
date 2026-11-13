@@ -3,6 +3,8 @@ import { ArrowDownRight, ArrowUpRight, GitBranch, RefreshCw } from "lucide-react
 import { Card } from "@/components/ui/card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RegressionSummary } from "../regression-summary";
+import { detectRegressions } from "../regressions";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -57,6 +59,23 @@ function SeriesChart({
   const current = available.at(-1),
     previous = available.at(-2);
   const delta = current && previous ? current.value! - previous.value! : null;
+  const regressions = new Set<string>();
+  if (dataset === "build")
+    for (let index = 1; index < points.length; index++) {
+      const point = points[index];
+      const before = points
+        .slice(0, index)
+        .reverse()
+        .find((candidate) => candidate.provenance.sha !== point.provenance.sha);
+      if (
+        point.provenance.ref === "refs/heads/main" &&
+        before &&
+        detectRegressions(before.summary, point.summary).some(
+          (change) => change.metric === metric.key && change.regression,
+        )
+      )
+        regressions.add(point.id);
+    }
   const active =
     focused === null ? current : (available.find((entry) => entry.index === focused) ?? current);
   const width = chartWidth,
@@ -159,6 +178,7 @@ function SeriesChart({
                 onMouseLeave={() => setFocused(null)}
               >
                 <title>
+                  {regressions.has(point.id) ? "Regression · " : ""}
                   {point.provenance.sha.slice(0, 7)} · {formatTrend(value!, metric.unit)} ·{" "}
                   {new Date(point.createdAt).toLocaleString()}
                 </title>
@@ -167,8 +187,14 @@ function SeriesChart({
                   cx={x(point)}
                   cy={y(value!)}
                   r={active?.index === index ? 4 : 2.5}
-                  fill={active?.index === index ? "#2563eb" : "var(--background)"}
-                  stroke="#2563eb"
+                  fill={
+                    regressions.has(point.id)
+                      ? "#d97706"
+                      : active?.index === index
+                        ? "#2563eb"
+                        : "var(--background)"
+                  }
+                  stroke={regressions.has(point.id) ? "#d97706" : "#2563eb"}
                   strokeWidth="1.5"
                 />
               </a>
@@ -403,6 +429,12 @@ export function ProjectTrends({ projectId }: { projectId: string }) {
               automatically.
             </p>
           ) : null}
+          {dataset === "build" && points.at(-1) && (
+            <RegressionSummary
+              buildId={points.at(-1)!.id}
+              revision={points.map((point) => point.id).join(",")}
+            />
+          )}
           {dataset === "build" ? (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {trendMetrics.build.map((item) => (

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { db, and, eq, asc, isNull, or, lt, inArray } from "void/db";
+import { and, eq, asc, isNull, or, lt, inArray } from "void/db";
+import { uploadDb } from "./upload-db";
 import { storage } from "void/storage";
 import { env } from "void/env";
 import { HTTPException } from "hono/http-exception";
@@ -24,6 +25,7 @@ import {
 export const objectKey = (buildId: string, artifactId: string) =>
   `reports/${buildId}/${artifactId}`;
 export async function beginUpload(manifest: BuildManifest, token: string) {
+  const db = uploadDb();
   const origin = new URL(required(env.PLATFORM_ORIGIN, "PLATFORM_ORIGIN")).origin;
   const provenance = await verifyActionsToken(token, origin);
   const installationId = await installationFor(provenance.repository);
@@ -92,6 +94,7 @@ export async function beginUpload(manifest: BuildManifest, token: string) {
   };
 }
 export async function uploadBuild(id: string, token: string) {
+  const db = uploadDb();
   const [build] = await db.select().from(builds).where(eq(builds.id, id));
   if (!build || build.state === "deleting") throw new HTTPException(404);
   await verifyUploadToken(
@@ -109,6 +112,7 @@ export async function uploadBuild(id: string, token: string) {
   return build;
 }
 async function artifactFor(buildId: string, id: string) {
+  const db = uploadDb();
   const [record] = await db
     .select()
     .from(artifacts)
@@ -122,6 +126,7 @@ export function expectedPartSize(artifact: Pick<ArtifactManifest, "bytes">, part
   return Math.min(PART_BYTES, artifact.bytes - (part - 1) * PART_BYTES);
 }
 export async function putPart(buildId: string, id: string, part: number, body: ArrayBuffer) {
+  const db = uploadDb();
   const { description, record } = await artifactFor(buildId, id);
   if (body.byteLength !== expectedPartSize(description, part))
     throw new HTTPException(400, { message: "Unexpected part size" });
@@ -157,6 +162,7 @@ export async function putPart(buildId: string, id: string, part: number, body: A
     });
 }
 export async function putArtifactBatch(buildId: string, files: { id: string; content: string }[]) {
+  const db = uploadDb();
   if (new Set(files.map((file) => file.id)).size !== files.length)
     throw new HTTPException(400, { message: "Duplicate batch artifacts" });
   const records = await db
@@ -212,6 +218,7 @@ export async function putArtifactBatch(buildId: string, files: { id: string; con
     );
 }
 export async function completeArtifact(buildId: string, id: string) {
+  const db = uploadDb();
   const { description, record } = await artifactFor(buildId, id);
   if (record.state === "ready") return;
   if (!record.multipartId) throw new HTTPException(409, { message: "Artifact has no parts" });
@@ -278,6 +285,7 @@ export async function completeArtifact(buildId: string, id: string) {
   }
 }
 export async function completeBuild(build: typeof builds.$inferSelect) {
+  const db = uploadDb();
   if (build.state === "ready") return;
   const records = await db.select().from(artifacts).where(eq(artifacts.buildId, build.id));
   if (
@@ -301,6 +309,7 @@ export async function completeBuild(build: typeof builds.$inferSelect) {
     .where(and(eq(builds.id, build.id), eq(builds.state, "uploading")));
 }
 export async function deleteBuild(id: string) {
+  const db = uploadDb();
   await db.update(builds).set({ state: "deleting" }).where(eq(builds.id, id));
   const pending = await db.select().from(artifacts).where(eq(artifacts.buildId, id));
   for (const artifact of pending)
@@ -322,6 +331,7 @@ export async function deleteBuild(id: string) {
   await db.delete(builds).where(eq(builds.id, id));
 }
 export async function cleanupAbandoned(now = Date.now()) {
+  const db = uploadDb();
   const abandoned = await db
     .select()
     .from(builds)

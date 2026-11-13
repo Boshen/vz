@@ -23,6 +23,7 @@ import {
   LayoutGrid,
   GitBranch,
 } from "lucide-react";
+import { RegressionSummary } from "./regression-summary";
 import { ProjectTrends } from "./trends/project-trends";
 import "../pages/style.css";
 
@@ -585,6 +586,7 @@ function Report({
           GitHub workflow ↗
         </a>
       </div>
+      <RegressionSummary buildId={report.id} />
       <div className="metrics-grid">
         <Metric
           name="TOTAL OUTPUT"

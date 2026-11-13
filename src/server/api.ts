@@ -19,6 +19,8 @@ import {
   type DiagnosticRow,
 } from "@vz/protocol";
 import { artifacts, builds, projects, repositories } from "../../db/schema";
+import { readArtifactJson } from "./artifact-json";
+import { buildRegressions } from "./regressions";
 import { projectTrends } from "./trends";
 import { authorizeRepository } from "./github";
 import { bearer } from "./security";
@@ -218,6 +220,9 @@ api.get("/projects/:id/builds", async (c) => {
   });
 });
 api.get("/builds/:id", async (c) => c.json(await report(c.env.context, c.req.param("id"))));
+api.get("/builds/:id/regressions", async (c) =>
+  c.json(await buildRegressions(await report(c.env.context, c.req.param("id"), false, false))),
+);
 api.get("/builds/:id/datasets/:dataset", async (c) => {
   const id = c.req.param("id");
   const dataset = datasetSchema.parse(c.req.param("dataset")),
@@ -240,7 +245,10 @@ api.get("/builds/:id/datasets/:dataset", async (c) => {
   if (!artifact) return c.json({ rows: [], pages: total.value });
   const object = await storage.get(objectKey(build.id, artifact.id));
   if (!object) throw new HTTPException(404);
-  return c.json({ rows: await object.json<DiagnosticRow[]>(), pages: total.value });
+  return c.json({
+    rows: (await readArtifactJson(object, artifact)) as DiagnosticRow[],
+    pages: total.value,
+  });
 });
 api.get("/builds/:id/artifacts/:artifact", async (c) => {
   const build = await report(c.env.context, c.req.param("id"), false, false);

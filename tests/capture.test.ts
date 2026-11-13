@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { afterEach, expect, test, vi } from "vitest";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -66,12 +67,16 @@ test("normalizes native graphs, timings, and deduplicated source without losing 
     packages: 0,
   });
   const modules = JSON.parse(
-    await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path, "utf8"),
+    gunzipSync(
+      await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path),
+    ).toString(),
   );
   expect(modules[0].id).toBe("src/main.ts");
   expect(modules[0].source).toMatch(/^source-/);
   const plugins = JSON.parse(
-    await readFile(result.artifacts.find((artifact) => artifact.id === "plugins-0")!.path, "utf8"),
+    gunzipSync(
+      await readFile(result.artifacts.find((artifact) => artifact.id === "plugins-0")!.path),
+    ).toString(),
   );
   expect(plugins[0].durationMs).toBe(3);
   expect(result.artifacts.filter((artifact) => artifact.kind === "source")).toHaveLength(2);
@@ -159,13 +164,14 @@ test("oversized graphs and future events remain lossless without exceeding datas
   const pages = result.artifacts.filter((artifact) => artifact.kind === "dataset");
   expect(pages.every((artifact) => artifact.bytes <= PAGE_BYTES)).toBe(true);
   const modules = JSON.parse(
-    await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path, "utf8"),
+    gunzipSync(
+      await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path),
+    ).toString(),
   );
   expect(modules[0].details.trendValues.imports).toBe(30000);
   const artifact = result.artifacts.find(
     (artifact) => artifact.id === modules[0].details.fullRecord,
   )!;
-  const { gunzipSync } = await import("node:zlib");
   const full = JSON.parse(gunzipSync(await readFile(artifact.path)).toString());
   expect(full.imports).toHaveLength(30000);
   expect(full.details.imports[0].kind).toBe("dynamic-import");
@@ -175,7 +181,7 @@ test("oversized graphs and future events remain lossless without exceeding datas
     await Promise.all(
       pages
         .filter((page) => page.dataset === "events")
-        .map(async (page) => JSON.parse(await readFile(page.path, "utf8"))),
+        .map(async (page) => JSON.parse(gunzipSync(await readFile(page.path)).toString())),
     )
   ).flat();
   const event = eventRows.find((row) => row.name === "FutureEvent");

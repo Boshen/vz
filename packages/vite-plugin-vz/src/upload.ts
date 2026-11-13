@@ -8,7 +8,12 @@ import {
 } from "@vz/protocol";
 import type { LocalArtifact } from "./capture";
 
-export async function request(url: string, init: RequestInit, fetcher = fetch) {
+export async function request(
+  url: string,
+  init: RequestInit,
+  fetcher = fetch,
+  retryConflict = false,
+) {
   for (let attempt = 0; ; attempt++) {
     try {
       const response = await fetcher(url, {
@@ -18,7 +23,12 @@ export async function request(url: string, init: RequestInit, fetcher = fetch) {
       });
       if (response.ok) return response;
       const message = `VZ HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`;
-      if (response.status < 500 && response.status !== 429) throw new FatalUploadError(message);
+      if (
+        response.status < 500 &&
+        response.status !== 429 &&
+        !(retryConflict && response.status === 409)
+      )
+        throw new FatalUploadError(message);
       throw new Error(message);
     } catch (error) {
       if (error instanceof FatalUploadError || attempt === 2) throw error;
@@ -112,6 +122,7 @@ export async function upload(
             `${base}/${session.id}/artifacts/${artifact.id}/complete`,
             { method: "POST", headers },
             fetcher,
+            true,
           );
         } finally {
           await handle.close();

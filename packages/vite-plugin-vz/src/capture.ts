@@ -116,14 +116,14 @@ export async function capture(
   async function page(dataset: Dataset, data: DiagnosticRow[], number: number) {
     const name = `${dataset}-${number}`;
     const path = join(output, name);
-    await writeFile(path, JSON.stringify(data));
+    await writeFile(path, gzipSync(JSON.stringify(data)));
     artifacts.push(
       await describeArtifact(path, {
         id: name,
         kind: "dataset",
         dataset,
         page: number,
-        contentType: "application/json",
+        contentType: "application/gzip",
       }),
     );
   }

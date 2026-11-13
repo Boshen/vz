@@ -19,6 +19,7 @@ import {
   trendIndex,
   trendMeasurements,
 } from "../../db/schema";
+import { readArtifactJson } from "./artifact-json";
 import { authorizeRepository } from "./github";
 import {
   trendDatasets,
@@ -40,9 +41,7 @@ const empty = (dataset: TrendDataset) =>
 async function objectJson(buildId: string, artifact: ArtifactManifest): Promise<unknown> {
   const object = await storage.get(`reports/${buildId}/${artifact.id}`);
   if (!object) throw new Error(`Missing diagnostic artifact: ${artifact.id}`);
-  if (artifact.contentType === "application/gzip")
-    return new Response(object.body.pipeThrough(new DecompressionStream("gzip"))).json();
-  return object.json();
+  return readArtifactJson(object, artifact);
 }
 export async function indexBuild(
   build: typeof builds.$inferSelect,

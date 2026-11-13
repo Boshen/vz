@@ -10,6 +10,7 @@ vi.mock("void/db", async (original) => {
   const actual = await original<typeof import("void/db")>();
   return { ...actual, db: actual.createDb(d1) };
 });
+vi.mock("void/_env", () => ({ requireRuntimeBinding: () => d1 }));
 vi.mock("void/storage", () => ({ storage: memoryStorage }));
 vi.mock("void/env", () => ({ env: settings }));
 vi.mock("void/auth", () => ({
@@ -623,4 +624,101 @@ test("small artifact batches verify checksums, stay scoped, and publish idempote
   expect((await call(`/uploads/${a.id}/artifacts/batch`, "POST", a.token, body)).status).toBe(200);
   expect((await call(`/uploads/${a.id}/complete`, "POST", a.token)).status).toBe(200);
   expect((await call(`/builds/${a.id}/datasets/modules`)).status).toBe(200);
+});
+
+test("regressions compare the preceding distinct main commit in the same project and environment", async () => {
+  async function build(
+    sha: string,
+    size: number,
+    time: number,
+    options: { environment?: string; ref?: string; project?: string } = {},
+  ) {
+    const data = manifest();
+    data.summary.outputBytes = size;
+    data.summary.durationMs = time;
+    data.environment = options.environment ?? "client";
+    data.project = options.project ?? "web";
+    const session = await create(data, {
+      sha: sha.repeat(40),
+      ref: options.ref ?? "refs/heads/main",
+    });
+    await complete(session);
+    return session;
+  }
+  const baseline = await build("a", 100000, 1000);
+  const first = (await (await call(`/builds/${baseline.id}/regressions`)).json()) as {
+    status: string;
+  };
+  expect(first.status).toBe("baseline");
+  await build("c", 999999, 9999, { environment: "ssr" });
+  await build("f", 999999, 9999, { ref: "refs/heads/feature" });
+  await build("d", 999999, 9999, { project: "another" });
+  const after = await build("b", 120000, 1400);
+  const rerun = await build("b", 120000, 1400);
+  for (const id of [after.id, rerun.id]) {
+    const response = await call(`/builds/${id}/regressions`);
+    expect(response.status).toBe(200);
+    const result = (await response.json()) as {
+      status: string;
+      baseline: { id: string };
+      changes: { regression: boolean }[];
+    };
+    expect(result.status).toBe("regression");
+    expect(result.baseline.id).toBe(baseline.id);
+    expect(result.changes.filter((change) => change.regression)).toHaveLength(2);
+  }
+  state.private = true;
+  expect((await call(`/builds/${after.id}/regressions`)).status).toBe(401);
+  state.user = { id: "user", name: "Alice" };
+  state.access = false;
+  expect((await call(`/builds/${after.id}/regressions`)).status).toBe(404);
+});
+
+test("compressed dataset pages round trip and reject oversized decoded data", async () => {
+  const { gzipSync } = await import("node:zlib");
+  for (const oversized of [false, true]) {
+    const body = gzipSync(
+      oversized
+        ? JSON.stringify([{ id: "big", name: "big", payload: "x".repeat(600000) }])
+        : contents,
+    );
+    const data = manifest();
+    data.artifacts[0] = {
+      ...data.artifacts[0],
+      contentType: "application/gzip",
+      bytes: body.length,
+      sha256: createHash("sha256").update(body).digest("hex"),
+    };
+    const session = await create(data);
+    expect(
+      (
+        await call(
+          `/uploads/${session.id}/artifacts/batch`,
+          "POST",
+          session.token,
+          JSON.stringify([{ id: "modules-0", content: body.toString("base64") }]),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await call(`/uploads/${session.id}/complete`, "POST", session.token)).status).toBe(
+      oversized ? 400 : 200,
+    );
+    const response = await call(`/builds/${session.id}/datasets/modules`);
+    expect(response.status).toBe(oversized ? 404 : 200);
+    if (!oversized)
+      expect(((await response.json()) as { rows: { name: string }[] }).rows[0].name).toBe(
+        "src/main.ts",
+      );
+  }
+});
+
+test("upload state and receipt reads use primary-consistent D1 sessions", async () => {
+  const sessions = vi.spyOn(d1, "withSession");
+  try {
+    const session = await create();
+    await complete(session);
+    expect(sessions).toHaveBeenCalledWith("first-primary");
+  } finally {
+    sessions.mockRestore();
+  }
 });

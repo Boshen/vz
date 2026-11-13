@@ -226,7 +226,7 @@ export default function vz(options: VzOptions): Plugin {
                 (relative(checkoutRoot, config.root).replaceAll("\\", "/") || "."),
               environment,
               checkoutSha,
-              producer: { plugin: "0.3.0", vite: viteVersion, rolldown: rolldownVersion },
+              producer: { plugin: "0.3.1", vite: viteVersion, rolldown: rolldownVersion },
               summary: result.summary,
               artifacts: result.artifacts.map(({ path: _path, ...artifact }) => artifact),
             });
