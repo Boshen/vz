@@ -100,7 +100,7 @@ async function report(
     .innerJoin(repositories, eq(repositories.id, projects.repositoryId))
     .where(and(eq(builds.id, id), eq(builds.state, "ready")));
   if (!row) throw new HTTPException(404);
-  const repo = await authorizeRepository(c, row.repository.id, write);
+  const repo = await authorizeRepository(c, row.repository.id, write, row.repository);
   const descriptors = includeArtifacts
     ? await db
         .select({ description: artifacts.description })
@@ -143,7 +143,9 @@ api.get("/projects", async (c) => {
       if (!access.has(row.repository.id))
         access.set(
           row.repository.id,
-          authorizeRepository(c.env.context, row.repository.id).catch(() => null),
+          authorizeRepository(c.env.context, row.repository.id, false, row.repository).catch(
+            () => null,
+          ),
         );
       const repo = await access.get(row.repository.id);
       if (!repo) return null;
@@ -197,12 +199,14 @@ api.get("/builds/:id/datasets/:dataset", async (c) => {
     sql`json_extract(${artifacts.description}, '$.kind') = 'dataset'`,
     sql`json_extract(${artifacts.description}, '$.dataset') = ${dataset}`,
   );
-  const [total] = await db.select({ value: count() }).from(artifacts).where(condition);
-  const [record] = await db
-    .select()
-    .from(artifacts)
-    .where(and(condition, sql`json_extract(${artifacts.description}, '$.page') = ${page}`))
-    .limit(1);
+  const [[total], [record]] = await Promise.all([
+    db.select({ value: count() }).from(artifacts).where(condition),
+    db
+      .select()
+      .from(artifacts)
+      .where(and(condition, sql`json_extract(${artifacts.description}, '$.page') = ${page}`))
+      .limit(1),
+  ]);
   const artifact = record?.description;
   if (!artifact) return c.json({ rows: [], pages: total.value });
   const object = await storage.get(objectKey(build.id, artifact.id));

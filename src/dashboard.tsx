@@ -101,30 +101,43 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
   const [projectFilter, setProjectFilter] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    void (async () => {
-      try {
-        const [identity, listing] = await Promise.all([
-          api<Session>("/session", controller.signal),
-          api<{ projects: Project[]; nextPage: number | null }>("/projects", controller.signal),
-        ]);
-        setSession(identity);
+    const handleError = (failure: unknown) => {
+      if (!controller.signal.aborted)
+        setError(failure instanceof Error ? failure.message : "Unable to load dashboard");
+    };
+    // Sidebar and identity should not block the selected report.
+    void api<Session>("/session", controller.signal).then(setSession).catch(handleError);
+    void api<{ projects: Project[]; nextPage: number | null }>("/projects", controller.signal)
+      .then((listing) => {
         setProjects(listing.projects);
         setNextProjectPage(listing.nextPage);
-        let selected = projectId;
-        if (reportId) {
-          const build = await api<BuildRecord>(`/builds/${reportId}`, controller.signal);
+        if (!projectId && !reportId) setLoading(false);
+      })
+      .catch((failure: unknown) => {
+        handleError(failure);
+        if (!projectId && !reportId && !controller.signal.aborted) setLoading(false);
+      });
+    if (reportId) {
+      void api<BuildRecord>(`/builds/${reportId}`, controller.signal)
+        .then((build) => {
           setReport(build);
-          selected = build.projectId;
-        }
-        if (selected)
-          setHistory(await api<History>(`/projects/${selected}/builds`, controller.signal));
-      } catch (failure) {
-        if (!controller.signal.aborted)
-          setError(failure instanceof Error ? failure.message : "Unable to load dashboard");
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    })();
+          setLoading(false);
+          return api<History>(`/projects/${build.projectId}/builds`, controller.signal).then(
+            setHistory,
+          );
+        })
+        .catch(handleError)
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    } else if (projectId) {
+      void api<History>(`/projects/${projectId}/builds`, controller.signal)
+        .then(setHistory)
+        .catch(handleError)
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    }
     return () => controller.abort();
   }, [projectId, reportId]);
   async function loadProjects() {

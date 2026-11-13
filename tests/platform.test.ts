@@ -48,7 +48,10 @@ beforeAll(async () => {
     if (path === "/app/installations/123")
       return Response.json({ suspended_at: state.active ? null : "now" });
     if (path === "/app/installations/123/access_tokens")
-      return Response.json({ token: "installation-token" });
+      return Response.json({
+        token: "installation-token",
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      });
     if (path === "/repositories/42") {
       const token = new Headers(init?.headers).get("Authorization");
       if (token === "Bearer user-token" && !state.access)
@@ -128,7 +131,12 @@ async function call(
       },
       body,
     },
-    { context: fakeContext },
+    {
+      context: {
+        ...fakeContext,
+        req: { raw: new Request(`https://vz.example/api/v1${path}`) },
+      } as CloudContext,
+    },
   );
 }
 async function create(data = manifest()) {
@@ -412,4 +420,49 @@ test("large manifests store descriptors separately from the bounded build row", 
     sqlite.prepare("SELECT count(*) AS total FROM artifacts WHERE build_id = ?").get(session.id)
       ?.total,
   ).toBe(10000);
+});
+
+test("warm reads reuse credentials, keep fresh checks, and avoid database writes", async () => {
+  const session = await create();
+  await complete(session);
+  state.requests = [];
+  const before = sqlite.prepare("SELECT total_changes() AS n").get()!.n;
+  expect((await call(`/builds/${session.id}`)).status).toBe(200);
+  expect((await call(`/builds/${session.id}/datasets/modules`)).status).toBe(200);
+  expect(state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(0);
+  expect(state.requests.filter((url) => url.endsWith("/app/installations/123"))).toHaveLength(2);
+  expect(state.requests.filter((url) => url.endsWith("/repositories/42"))).toHaveLength(2);
+  expect(sqlite.prepare("SELECT total_changes() AS n").get()!.n).toBe(before);
+});
+
+test("comparison authorizes its repository once within the request", async () => {
+  const a = await create(),
+    b = await create();
+  await complete(a);
+  await complete(b);
+  state.requests = [];
+  expect((await call(`/builds/${b.id}/compare?before=${a.id}`)).status).toBe(200);
+  expect(state.requests.filter((url) => url.endsWith("/repositories/42"))).toHaveLength(1);
+  expect(state.requests.filter((url) => url.endsWith("/app/installations/123"))).toHaveLength(1);
+  state.private = true;
+  expect((await call(`/builds/${b.id}/compare?before=${a.id}`)).status).toBe(401);
+});
+
+test("installation credentials renew before expiration", async () => {
+  const session = await create();
+  await complete(session);
+  state.requests = [];
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 3600_000);
+  try {
+    expect((await call(`/builds/${session.id}`)).status).toBe(200);
+    expect(state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(1);
+    state.requests = [];
+    expect((await call(`/builds/${session.id}`)).status).toBe(200);
+    expect(state.requests.filter((url) => url.endsWith("/access_tokens"))).toHaveLength(0);
+    state.active = false;
+    expect((await call(`/builds/${session.id}`)).status).toBe(404);
+  } finally {
+    clock.mockRestore();
+  }
 });
