@@ -2,6 +2,9 @@
 import { defineConfig } from "void/config";
 
 export default defineConfig({
+  inference: {
+    build: "vp -C . build",
+  },
   routing: {
     typedRoutes: true,
   },
