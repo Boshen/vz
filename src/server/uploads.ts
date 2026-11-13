@@ -75,17 +75,14 @@ export async function beginUpload(manifest: BuildManifest, token: string) {
   const [build] = await db.select().from(builds).where(eq(builds.id, id));
   if (build.manifestHash !== manifestHash || build.state === "deleting")
     throw new HTTPException(409, { message: "Capture id already used" });
-  // Individual inserts avoid D1's bind-parameter limit even for captures with many source objects.
-  for (let i = 0; i < manifest.artifacts.length; i += 20) {
-    await db
-      .insert(artifacts)
-      .values(
-        manifest.artifacts
-          .slice(i, i + 20)
-          .map((artifact) => ({ buildId: id, id: artifact.id, description: artifact })),
-      )
-      .onConflictDoNothing();
-  }
+  // Bind a JSON page rather than four SQL parameters for every artifact.
+  for (let i = 0; i < manifest.artifacts.length; i += 100)
+    await db.run(sql`
+      INSERT INTO artifacts (build_id, id, description, state)
+      SELECT ${id}, json_extract(value, '$.id'), value, 'uploading'
+      FROM json_each(${JSON.stringify(manifest.artifacts.slice(i, i + 100))}) WHERE true
+      ON CONFLICT (build_id, id) DO NOTHING
+    `);
   return {
     id,
     batch: { maxFiles: BATCH_FILES, maxBytes: SMALL_ARTIFACT_BYTES },

@@ -823,3 +823,31 @@ test("preparation groups a large index into bounded storage calls", async () => 
     put.mockRestore();
   }
 });
+
+test("large upload setup stores every descriptor and preserves receipts on retry", async () => {
+  const data = manifest();
+  data.artifacts = Array.from({ length: 401 }, (_, index) => ({
+    id: `source-${index}`,
+    kind: "source",
+    bytes: Buffer.byteLength(contents),
+    sha256: createHash("sha256").update(contents).digest("hex"),
+    contentType: "text/plain",
+  }));
+  const first = await create(data);
+  expect(
+    sqlite.prepare("SELECT count(*) AS n FROM artifacts WHERE build_id = ?").get(first.id)!.n,
+  ).toBe(401);
+  sqlite
+    .prepare("UPDATE artifacts SET state = 'ready' WHERE build_id = ? AND id = 'source-0'")
+    .run(first.id);
+  const retried = await create(data);
+  expect(retried.id).toBe(first.id);
+  const rows = sqlite
+    .prepare("SELECT id, description, state FROM artifacts WHERE build_id = ? ORDER BY id")
+    .all(first.id);
+  expect(rows).toHaveLength(401);
+  expect(rows.find((row) => row.id === "source-0")!.state).toBe("ready");
+  expect(JSON.parse(rows.find((row) => row.id === "source-400")!.description as string)).toEqual(
+    data.artifacts[400],
+  );
+});
