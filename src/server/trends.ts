@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { db, and, eq, desc, lt, or, sql, isNull, inArray } from "void/db";
 import { storage } from "void/storage";
 import type { CloudContext } from "void";
@@ -43,12 +44,7 @@ async function objectJson(buildId: string, artifact: ArtifactManifest): Promise<
   if (!object) throw new Error(`Missing diagnostic artifact: ${artifact.id}`);
   return readArtifactJson(object, artifact);
 }
-export async function indexBuild(
-  build: typeof builds.$inferSelect,
-  descriptions?: ArtifactManifest[],
-) {
-  const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
-  if (indexed?.version === VERSION) return;
+async function prepareIndex(build: typeof builds.$inferSelect, descriptions?: ArtifactManifest[]) {
   const files =
     descriptions ??
     (
@@ -157,9 +153,31 @@ export async function indexBuild(
     bytes += size;
   }
   if (batch.length) batches.push(batch);
-  for (let i = 0; i < batches.length; i += 4)
+  return batches;
+}
+
+/** Checkpoint immutable measurements before bounded, idempotent database writes. */
+export async function indexBuild(
+  build: typeof builds.$inferSelect,
+  descriptions?: ArtifactManifest[],
+): Promise<boolean> {
+  const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
+  if (indexed?.version === VERSION) return true;
+  const prefix = `reports/${build.id}/.trend-index-${VERSION}`;
+  const cached = await storage.get(`${prefix}/plan`);
+  let batches: Measurement[][];
+  if (cached) {
+    batches = await new Response(cached.body.pipeThrough(new DecompressionStream("gzip"))).json();
+  } else {
+    batches = await prepareIndex(build, descriptions);
+    await storage.put(`${prefix}/plan`, gzipSync(JSON.stringify(batches)));
+  }
+  const checkpoint = await storage.get(`${prefix}/cursor`);
+  const cursor = checkpoint ? ((await checkpoint.json()) as { cursor: number }).cursor : 0;
+  const end = Math.min(cursor + 16, batches.length);
+  for (let i = cursor; i < end; i += 4)
     await Promise.all(
-      batches.slice(i, i + 4).map((rows) =>
+      batches.slice(i, Math.min(i + 4, end)).map((rows) =>
         db.run(sql`
     INSERT INTO trend_measurements (build_id, dataset, entity, label, metrics)
     SELECT ${build.id}, json_extract(value, '$.dataset'), json_extract(value, '$.entity'), json_extract(value, '$.label'), json_extract(value, '$.metrics')
@@ -168,10 +186,14 @@ export async function indexBuild(
   `),
       ),
     );
+  await storage.put(`${prefix}/cursor`, Buffer.from(JSON.stringify({ cursor: end })));
+  if (end < batches.length) return false;
   await db
     .insert(trendIndex)
     .values({ buildId: build.id, version: VERSION })
     .onConflictDoUpdate({ target: trendIndex.buildId, set: { version: VERSION } });
+  await storage.delete([`${prefix}/plan`, `${prefix}/cursor`]);
+  return true;
 }
 export async function backfillTrends(ids?: string[]) {
   const targets = ids

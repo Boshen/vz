@@ -105,8 +105,10 @@ api.post("/uploads/:id/artifacts/:artifact/complete", async (c) => {
   return c.json({ ok: true });
 });
 api.post("/uploads/:id/complete", async (c) => {
-  await completeBuild(await uploadBuild(c.req.param("id"), bearer(c.req.header("Authorization"))));
-  return c.json({ ok: true });
+  const ready = await completeBuild(
+    await uploadBuild(c.req.param("id"), bearer(c.req.header("Authorization"))),
+  );
+  return c.json({ ok: ready }, ready ? 200 : 202);
 });
 async function report(
   c: CloudContext,

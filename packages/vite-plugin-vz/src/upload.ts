@@ -132,6 +132,16 @@ export async function upload(
   );
   const failed = results.find((result) => result.status === "rejected");
   if (failed?.status === "rejected") throw failed.reason;
-  await request(`${base}/${session.id}/complete`, { method: "POST", headers }, fetcher);
+  await finalizeUpload(`${base}/${session.id}/complete`, headers, fetcher);
   return session.reportUrl;
+}
+
+export async function finalizeUpload(url: string, headers: HeadersInit, fetcher = fetch) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  for (;;) {
+    const response = await request(url, { method: "POST", headers }, fetcher);
+    if (response.status !== 202) return;
+    if (Date.now() >= deadline) throw new Error("VZ indexing did not complete within 15 minutes");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }

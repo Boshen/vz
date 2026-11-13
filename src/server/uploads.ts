@@ -286,7 +286,7 @@ export async function completeArtifact(buildId: string, id: string) {
 }
 export async function completeBuild(build: typeof builds.$inferSelect) {
   const db = uploadDb();
-  if (build.state === "ready") return;
+  if (build.state === "ready") return true;
   const records = await db.select().from(artifacts).where(eq(artifacts.buildId, build.id));
   if (
     records.length !== build.artifactCount ||
@@ -299,14 +299,18 @@ export async function completeBuild(build: typeof builds.$inferSelect) {
     .from(repositories)
     .where(eq(repositories.id, project.repositoryId));
   await refreshRepository(repo.id, repo.installationId);
-  await indexBuild(
-    build,
-    records.map((record) => record.description),
-  );
+  if (
+    !(await indexBuild(
+      build,
+      records.map((record) => record.description),
+    ))
+  )
+    return false;
   await db
     .update(builds)
     .set({ state: "ready" })
     .where(and(eq(builds.id, build.id), eq(builds.state, "uploading")));
+  return true;
 }
 export async function deleteBuild(id: string) {
   const db = uploadDb();

@@ -722,3 +722,45 @@ test("upload state and receipt reads use primary-consistent D1 sessions", async 
     sessions.mockRestore();
   }
 });
+
+test("large indexes resume checkpoints and remain unpublished until every batch is stored", async () => {
+  const { gzipSync } = await import("node:zlib");
+  const session = await trendBuild(42);
+  sqlite.prepare("UPDATE builds SET state = 'uploading' WHERE id = ?").run(session.id);
+  sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
+  sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
+  const prefix = `reports/${session.id}/.trend-index-1`;
+  const batches = Array.from({ length: 20 }, (_, i) => [
+    {
+      dataset: "modules",
+      entity: `entity-${i}`,
+      label: `Module ${i}`,
+      metrics: { records: 1, bytes: i },
+    },
+  ]);
+  await memoryStorage.put(`${prefix}/plan`, gzipSync(JSON.stringify(batches)));
+  await memoryStorage.delete(`${prefix}/cursor`);
+  const finish = () => call(`/uploads/${session.id}/complete`, "POST", session.token);
+  expect((await finish()).status).toBe(202);
+  expect((await call(`/builds/${session.id}`)).status).toBe(404);
+  expect(
+    sqlite.prepare("SELECT count(*) AS n FROM trend_index WHERE build_id = ?").get(session.id)!.n,
+  ).toBe(0);
+  expect(
+    sqlite
+      .prepare("SELECT count(*) AS n FROM trend_measurements WHERE build_id = ?")
+      .get(session.id)!.n,
+  ).toBe(16);
+  // A lost cursor receipt can repeat writes without double-counting measurements.
+  await memoryStorage.delete(`${prefix}/cursor`);
+  expect((await finish()).status).toBe(202);
+  expect((await finish()).status).toBe(200);
+  expect((await call(`/builds/${session.id}`)).status).toBe(200);
+  expect(
+    sqlite
+      .prepare(
+        "SELECT count(*) AS n, sum(json_extract(metrics, '$.records')) AS records FROM trend_measurements WHERE build_id = ?",
+      )
+      .get(session.id),
+  ).toMatchObject({ n: 20, records: 20 });
+});

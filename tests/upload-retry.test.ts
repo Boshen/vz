@@ -22,3 +22,21 @@ test("completion retries transient receipt conflicts but initialization conflict
     vi.useRealTimers();
   }
 });
+
+test("finalization waits for checkpointed indexing before returning a report", async () => {
+  const { finalizeUpload } = await import("../packages/vite-plugin-vz/src/upload");
+  vi.useFakeTimers();
+  try {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ ok: false }, { status: 202 }))
+      .mockResolvedValueOnce(Response.json({ ok: false }, { status: 202 }))
+      .mockResolvedValue(Response.json({ ok: true }));
+    const pending = finalizeUpload("https://vz.example/complete", {}, fetcher);
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
+  }
+});

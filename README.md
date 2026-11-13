@@ -179,7 +179,9 @@ platform build to the `vz` project at `https://vz.void.app`, with client and Wor
 environments separated. The workflow grants OIDC only to its build job and enables
 capture only for main-branch pushes; pull-request and local builds do not upload.
 Small artifacts use checksum-verified batches when the platform advertises support;
-large artifacts retain resumable multipart uploads.
+large artifacts retain resumable multipart uploads. Timeline indexing checkpoints
+its measurements and database writes; the plugin polls until the complete index
+is published, so large captures can resume after a request failure.
 
 ## Regression detection
 
