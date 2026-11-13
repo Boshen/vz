@@ -34,6 +34,10 @@ export const d1 = {
 const objects = new Map<string, Uint8Array>();
 const multiparts = new Map<string, { key: string; parts: Map<number, Uint8Array> }>();
 export const memoryStorage = {
+  async put(key: string, value: Uint8Array) {
+    objects.set(key, new Uint8Array(value));
+    return {};
+  },
   async createMultipartUpload(key: string) {
     const id = crypto.randomUUID();
     multiparts.set(id, { key, parts: new Map() });

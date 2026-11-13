@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
-import { db, and, eq, asc, isNull, or, lt } from "void/db";
+import { db, and, eq, asc, isNull, or, lt, inArray } from "void/db";
 import { storage } from "void/storage";
 import { env } from "void/env";
 import { HTTPException } from "hono/http-exception";
 import { artifacts, builds, projects, repositories, uploadParts } from "../../db/schema";
-import { PART_BYTES, type ArtifactManifest, type BuildManifest } from "@vz/protocol";
+import {
+  BATCH_FILES,
+  SMALL_ARTIFACT_BYTES,
+  PART_BYTES,
+  type ArtifactManifest,
+  type BuildManifest,
+} from "@vz/protocol";
 import { indexBuild } from "./trends";
 import { installationFor, refreshRepository } from "./github";
 import {
@@ -80,6 +86,7 @@ export async function beginUpload(manifest: BuildManifest, token: string) {
   }
   return {
     id,
+    batch: { maxFiles: BATCH_FILES, maxBytes: SMALL_ARTIFACT_BYTES },
     token: await issueUploadToken(id, manifestHash, required(env.UPLOAD_SECRET, "UPLOAD_SECRET")),
     reportUrl: `${origin}/reports/${id}`,
   };
@@ -148,6 +155,61 @@ export async function putPart(buildId: string, id: string, part: number, body: A
       target: [uploadParts.buildId, uploadParts.artifactId, uploadParts.part],
       set: { etag: result.etag, bytes: body.byteLength },
     });
+}
+export async function putArtifactBatch(buildId: string, files: { id: string; content: string }[]) {
+  if (new Set(files.map((file) => file.id)).size !== files.length)
+    throw new HTTPException(400, { message: "Duplicate batch artifacts" });
+  const records = await db
+    .select()
+    .from(artifacts)
+    .where(
+      and(
+        eq(artifacts.buildId, buildId),
+        inArray(
+          artifacts.id,
+          files.map((file) => file.id),
+        ),
+      ),
+    );
+  if (records.length !== files.length) throw new HTTPException(404);
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const verified = files.map((file) => {
+    const record = byId.get(file.id)!;
+    const bytes = Buffer.from(file.content, "base64");
+    if (
+      record.description.bytes > SMALL_ARTIFACT_BYTES ||
+      bytes.length !== record.description.bytes ||
+      bytes.toString("base64") !== file.content ||
+      createHash("sha256").update(bytes).digest("hex") !== record.description.sha256
+    )
+      throw new HTTPException(400, { message: "Batch artifact size or checksum mismatch" });
+    if (record.state !== "uploading" && record.state !== "ready") throw new HTTPException(409);
+    return { record, bytes };
+  });
+  let index = 0;
+  await Promise.all(
+    Array.from({ length: 6 }, async () => {
+      for (let file = verified[index++]; file; file = verified[index++]) {
+        if (file.record.state === "ready") continue;
+        await storage.put(objectKey(buildId, file.record.id), file.bytes, {
+          httpMetadata: { contentType: file.record.description.contentType },
+        });
+      }
+    }),
+  );
+  await db
+    .update(artifacts)
+    .set({ state: "ready" })
+    .where(
+      and(
+        eq(artifacts.buildId, buildId),
+        inArray(
+          artifacts.id,
+          files.map((file) => file.id),
+        ),
+        eq(artifacts.state, "uploading"),
+      ),
+    );
 }
 export async function completeArtifact(buildId: string, id: string) {
   const { description, record } = await artifactFor(buildId, id);

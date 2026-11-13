@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const PROTOCOL_VERSION = 1;
+export const SMALL_ARTIFACT_BYTES = 128 * 1024;
+export const BATCH_FILES = 32;
 export const PART_BYTES = 8 * 1024 * 1024;
 export const PAGE_BYTES = 512 * 1024;
 export const datasets = ["modules", "chunks", "assets", "packages", "plugins", "events"] as const;
@@ -107,6 +109,7 @@ export interface Provenance {
   actor: string;
 }
 export interface UploadSession {
+  batch?: { maxFiles: number; maxBytes: number };
   id: string;
   token: string;
   reportUrl: string;

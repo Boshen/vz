@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { expect, test, vi } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -24,6 +25,7 @@ test.each([
   const manifests: BuildManifest[] = [];
   const uploaded = new Map<string, Buffer>();
   vi.stubEnv("VITE_CAPTURE_SECRET", "do-not-upload-environment");
+  let batchRequests = 0;
   let parts = 0,
     completed = 0;
   vi.stubGlobal("fetch", async (input: string, init: RequestInit = {}) => {
@@ -35,10 +37,21 @@ test.each([
     if (input === "https://vz.example/api/v1/uploads") {
       manifests.push(buildManifestSchema.parse(JSON.parse(init.body as string)));
       return Response.json({
+        batch: reloadConfig ? { maxFiles: 32, maxBytes: 128 * 1024 } : undefined,
         id: "test-capture",
         token: "test-upload",
         reportUrl: "https://vz.example/reports/test-capture",
       });
+    }
+    if (input.endsWith("/artifacts/batch")) {
+      batchRequests++;
+      for (const file of JSON.parse(init.body as string) as { id: string; content: string }[]) {
+        const body = Buffer.from(file.content, "base64");
+        const descriptor = manifests[0].artifacts.find((artifact) => artifact.id === file.id)!;
+        expect(body.length).toBe(descriptor.bytes);
+        expect(createHash("sha256").update(body).digest("hex")).toBe(descriptor.sha256);
+        uploaded.set(file.id, body);
+      }
     }
     if (init.method === "PUT") {
       parts++;
@@ -96,7 +109,7 @@ test.each([
     expect(manifests[0].producer.vite).toBe("8.3.7");
     expect(manifests[0].summary.modules).toBeGreaterThan(0);
     expect(manifests[0].artifacts.some((artifact) => artifact.kind === "raw")).toBe(true);
-    expect(parts).toBeGreaterThan(0);
+    expect(parts + batchRequests).toBeGreaterThan(0);
     expect(completed).toBe(1);
     const descriptors = manifests[0].artifacts;
     const binary = descriptors.find(

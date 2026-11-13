@@ -1,5 +1,11 @@
-import { open } from "node:fs/promises";
-import { PART_BYTES, type BuildManifest, type UploadSession } from "@vz/protocol";
+import { open, readFile } from "node:fs/promises";
+import {
+  BATCH_FILES,
+  SMALL_ARTIFACT_BYTES,
+  PART_BYTES,
+  type BuildManifest,
+  type UploadSession,
+} from "@vz/protocol";
 import type { LocalArtifact } from "./capture";
 
 export async function request(url: string, init: RequestInit, fetcher = fetch) {
@@ -55,10 +61,40 @@ export async function upload(
   );
   const session = (await response.json()) as UploadSession;
   const headers = { Authorization: `Bearer ${session.token}` };
-  const queue = [...artifacts];
+  const maxFiles = Math.min(BATCH_FILES, session.batch?.maxFiles ?? 1);
+  const maxBytes = Math.min(SMALL_ARTIFACT_BYTES, session.batch?.maxBytes ?? 0);
+  if (!Number.isInteger(maxFiles) || maxFiles < 1 || !Number.isInteger(maxBytes) || maxBytes < 0)
+    throw new Error("Invalid batch upload capabilities");
+  const small = artifacts.filter((artifact) => artifact.bytes <= maxBytes);
+  const queue: LocalArtifact[][] = artifacts
+    .filter((artifact) => artifact.bytes > maxBytes)
+    .map((artifact) => [artifact]);
+  for (let offset = 0; offset < small.length; offset += maxFiles)
+    queue.push(small.slice(offset, offset + maxFiles));
   const results = await Promise.allSettled(
     Array.from({ length: 3 }, async () => {
-      for (let artifact = queue.shift(); artifact; artifact = queue.shift()) {
+      for (let files = queue.shift(); files; files = queue.shift()) {
+        if (files.every((file) => file.bytes <= maxBytes)) {
+          const body = await Promise.all(
+            files.map(async (file) => {
+              const bytes = await readFile(file.path);
+              if (bytes.length !== file.bytes)
+                throw new Error("Diagnostic artifact changed during upload");
+              return { id: file.id, content: bytes.toString("base64") };
+            }),
+          );
+          await request(
+            `${base}/${session.id}/artifacts/batch`,
+            {
+              method: "POST",
+              headers: { ...headers, "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            },
+            fetcher,
+          );
+          continue;
+        }
+        const artifact = files[0];
         const handle = await open(artifact.path, "r");
         try {
           for (let offset = 0, part = 1; offset < artifact.bytes; offset += PART_BYTES, part++) {

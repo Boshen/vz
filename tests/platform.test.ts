@@ -601,3 +601,26 @@ test("timeline reads check current private access and deletion removes indexed d
     sqlite.prepare("SELECT count(*) AS n FROM trend_index WHERE build_id = ?").get(session.id)!.n,
   ).toBe(0);
 });
+
+test("small artifact batches verify checksums, stay scoped, and publish idempotently", async () => {
+  const a = await create(),
+    b = await create();
+  const body = JSON.stringify([
+    { id: "modules-0", content: Buffer.from(contents).toString("base64") },
+  ]);
+  expect((await call(`/uploads/${a.id}/artifacts/batch`, "POST", b.token, body)).status).toBe(401);
+  expect(
+    (
+      await call(
+        `/uploads/${a.id}/artifacts/batch`,
+        "POST",
+        a.token,
+        JSON.stringify([{ id: "modules-0", content: Buffer.from("tampered").toString("base64") }]),
+      )
+    ).status,
+  ).toBe(400);
+  expect((await call(`/uploads/${a.id}/artifacts/batch`, "POST", a.token, body)).status).toBe(200);
+  expect((await call(`/uploads/${a.id}/artifacts/batch`, "POST", a.token, body)).status).toBe(200);
+  expect((await call(`/uploads/${a.id}/complete`, "POST", a.token)).status).toBe(200);
+  expect((await call(`/builds/${a.id}/datasets/modules`)).status).toBe(200);
+});

@@ -13,6 +13,8 @@ import {
   compareSummaries,
   datasetSchema,
   PART_BYTES,
+  BATCH_FILES,
+  SMALL_ARTIFACT_BYTES,
   type BuildRecord,
   type DiagnosticRow,
 } from "@vz/protocol";
@@ -27,6 +29,7 @@ import {
   deleteBuild,
   objectKey,
   putPart,
+  putArtifactBatch,
   uploadBuild,
 } from "./uploads";
 
@@ -64,6 +67,21 @@ api.post("/uploads", async (c) =>
     ),
   ),
 );
+api.post("/uploads/:id/artifacts/batch", bodyLimit({ maxSize: 6 * 1024 ** 2 }), async (c) => {
+  const build = await uploadBuild(c.req.param("id"), bearer(c.req.header("Authorization")));
+  const files = z
+    .array(
+      z.object({
+        id: z.string().min(1).max(160),
+        content: z.string().max(Math.ceil(SMALL_ARTIFACT_BYTES / 3) * 4),
+      }),
+    )
+    .min(1)
+    .max(BATCH_FILES)
+    .parse(await c.req.json());
+  await putArtifactBatch(build.id, files);
+  return c.json({ ok: true });
+});
 api.put(
   "/uploads/:id/artifacts/:artifact/parts/:part",
   bodyLimit({ maxSize: PART_BYTES }),
