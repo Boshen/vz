@@ -79,6 +79,17 @@ export default function vz(options: VzOptions): Plugin {
       order: "post",
       async handler(builder) {
         if (!active) return;
+        // Vite can reload config for each environment, creating another plugin
+        // instance before sharing hooks. Read the session used by the built config.
+        for (const [name, environment] of Object.entries(builder.environments)) {
+          const native = environment.config.build.rolldownOptions;
+          const devtools = native.devtools;
+          if (devtools && typeof devtools === "object" && devtools.sessionId)
+            sessions.set(name, {
+              id: devtools.sessionId,
+              cwd: resolve(native.cwd ?? process.cwd()),
+            });
+        }
         let temporary: string | undefined;
         try {
           temporary = await mkdtemp(join(tmpdir(), "vz-"));

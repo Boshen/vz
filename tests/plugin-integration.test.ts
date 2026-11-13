@@ -5,7 +5,7 @@ import { createBuilder } from "vite";
 import vz from "../packages/vite-plugin-vz/src/index";
 import { buildManifestSchema, type BuildManifest } from "@vz/protocol";
 
-test("real Vite build closes native logs and uploads a complete CI capture", async () => {
+test.each([false, true])("real Vite capture with config reload: %s", async (reloadConfig) => {
   const fixture = await mkdtemp(resolve(".void/vz-integration-"));
   await writeFile(join(fixture, "package.json"), '{"name":"fixture","type":"module"}');
   await writeFile(join(fixture, "entry.js"), "export const answer = 42;");
@@ -37,18 +37,23 @@ test("real Vite build closes native logs and uploads a complete CI capture", asy
     return Response.json({ ok: true });
   });
   try {
+    const configFile = join(fixture, "vite.config.ts");
+    await writeFile(
+      configFile,
+      `import vz from ${JSON.stringify(resolve("packages/vite-plugin-vz/src/index.ts"))}; export default { plugins: [vz({ endpoint: "https://vz.example", strict: true })] };`,
+    );
     const builder = await createBuilder(
       {
-        configFile: false,
+        configFile: reloadConfig ? configFile : false,
         root: fixture,
         logLevel: "silent",
-        plugins: [vz({ endpoint: "https://vz.example", strict: true })],
+        plugins: reloadConfig ? [] : [vz({ endpoint: "https://vz.example", strict: true })],
         build: {
           lib: { entry: join(fixture, "entry.js"), formats: ["es"] },
           outDir: join(fixture, "dist"),
         },
       },
-      true,
+      !reloadConfig,
     );
     await builder.buildApp();
     expect(manifests).toHaveLength(1);
