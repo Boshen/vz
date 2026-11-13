@@ -1,0 +1,18 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: voidzero-dev/setup-vp@v1
+      - run: vp install --frozen-lockfile
+      - run: vp check --deny-warnings
+      - run: vp test --config vitest.config.ts
+      - run: vp run pack:plugin
+      - run: vp -C . build

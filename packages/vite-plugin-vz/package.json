@@ -1,0 +1,31 @@
+{
+  "name": "vite-plugin-vz",
+  "version": "0.1.0",
+  "description": "Upload Vite and Rolldown diagnostics to VZ using GitHub Actions OIDC",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "pack": "vp pack"
+  },
+  "devDependencies": {
+    "@vz/protocol": "workspace:*",
+    "vite": "npm:@voidzero-dev/vite-plus-core@^1.6.0",
+    "vite-plus": "^1.6.0"
+  },
+  "peerDependencies": {
+    "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": "^24.22.0 || >=26.12.0"
+  }
+}

@@ -1,3 +1,6 @@
+packages:
+  - packages/*
+
 minimumReleaseAgeExclude:
   - "@cloudflare/build-output-utils@0.9.13"
   - "@cloudflare/codemods@0.7.7"

@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794471878068,
+      "tag": "20261112082438_curved_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794474335349,
+      "tag": "20261112090535_vengeful_ben_grimm",
+      "breakpoints": true
+    }
+  ]
+}

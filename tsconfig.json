@@ -7,8 +7,21 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["void/env"],
+    "types": ["void/env", "node"],
     "jsx": "react-jsx"
   },
-  "include": ["src", "pages", "routes", "middleware", "crons", "queues", "db"]
+  "include": [
+    "src",
+    "pages",
+    "routes",
+    "middleware",
+    "crons",
+    "queues",
+    "db",
+    "packages",
+    "auth.ts",
+    "env.ts",
+    "tests",
+    "vite.config.ts"
+  ]
 }
