@@ -74,3 +74,26 @@ export const webhookDeliveries = sqliteTable("webhook_deliveries", {
   id: text("id").primaryKey(),
   createdAt: integer("created_at").notNull(),
 });
+
+export const trendIndex = sqliteTable("trend_index", {
+  buildId: text("build_id")
+    .primaryKey()
+    .references(() => builds.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+});
+export const trendMeasurements = sqliteTable(
+  "trend_measurements",
+  {
+    buildId: text("build_id")
+      .notNull()
+      .references(() => builds.id, { onDelete: "cascade" }),
+    dataset: text("dataset").notNull(),
+    entity: text("entity").notNull(),
+    label: text("label").notNull(),
+    metrics: text("metrics", { mode: "json" }).$type<Record<string, number>>().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.buildId, table.dataset, table.entity] }),
+    index("trend_dataset_entity_build").on(table.dataset, table.entity, table.buildId),
+  ],
+);

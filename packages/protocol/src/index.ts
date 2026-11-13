@@ -132,3 +132,57 @@ export function compareSummaries(before: BuildSummary, after: BuildSummary) {
     }),
   );
 }
+
+/** Stable record keys and quantitative fields shared by capture and indexing. */
+export function diagnosticIdentity(dataset: Dataset, row: DiagnosticRow) {
+  if (dataset === "plugins")
+    return {
+      key: JSON.stringify([row.plugin ?? row.name, row.hook]),
+      label: `${row.plugin ?? row.name} / ${row.hook ?? "all hooks"}`,
+    };
+  if (dataset === "events")
+    return {
+      key: JSON.stringify([row.plugin, row.hook, row.name]),
+      label: row.hook ? `${row.plugin ?? ""} / ${row.hook} / ${row.name}` : row.name,
+    };
+  if (dataset === "packages")
+    return { key: `${row.name}@${row.version ?? ""}`, label: `${row.name}@${row.version ?? ""}` };
+  if (dataset === "chunks") {
+    const name =
+      typeof row.details?.entryModule === "string" && row.details.entryModule
+        ? row.details.entryModule
+        : row.name;
+    return { key: name, label: name };
+  }
+  return { key: dataset === "assets" ? row.name : row.id, label: row.name };
+}
+export function diagnosticMetrics(row: DiagnosticRow): Record<string, number> {
+  const length = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  const metrics: Record<string, number> = {
+    records: 1,
+    imports: row.imports?.length ?? 0,
+    moduleCount: row.modules?.length ?? 0,
+    entries: row.details?.entry === true ? 1 : 0,
+    sideEffects:
+      row.details?.sideEffects === true || row.details?.sideEffects === "no-treeshake" ? 1 : 0,
+    cssAssets: length(row.details?.importedCss),
+    assetDependencies: length(row.details?.importedAssets),
+  };
+  for (const field of ["bytes", "durationMs", "calls", "startMs"] as const)
+    if (typeof row[field] === "number" && Number.isFinite(row[field])) metrics[field] = row[field]!;
+  for (const field of ["importers", "dynamicImports", "dynamicImporters", "exports"] as const)
+    metrics[field] = length(row.details?.[field]);
+  if (typeof row.details?.gzipBytes === "number") metrics.gzipBytes = row.details.gzipBytes;
+  if (row.details?.duplicated) metrics.duplicates = 1;
+  if (Array.isArray(row.details?.rendering))
+    for (const rendered of row.details.rendering as {
+      renderedLength?: number;
+      renderedExports?: string[];
+    }[]) {
+      metrics.renderedBytes =
+        (metrics.renderedBytes ?? 0) +
+        (typeof rendered.renderedLength === "number" ? rendered.renderedLength : 0);
+      metrics.renderedExports = (metrics.renderedExports ?? 0) + length(rendered.renderedExports);
+    }
+  return metrics;
+}

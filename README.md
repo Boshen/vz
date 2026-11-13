@@ -151,3 +151,25 @@ Artifacts are limited to 5 GiB each and 20,000 per manifest; datasets are paged 
 interactive requests never parse a full native log. Raw downloads stream from R2;
 source previews use byte ranges. Configure Worker CPU limits for the largest
 captures you intend to accept, since final checksum verification reads each object.
+
+## Main-branch timelines
+
+Each project page includes live time series for completed uploads on `main`.
+Client and server environments remain separate. The build overview plots output
+size, duration, module/chunk/asset counts, and package counts. The dataset explorer
+plots numeric measurements for modules, chunks, assets, package versions, plugin
+hooks, event groups, stored artifact kinds, and process memory/CPU snapshots.
+Select a point to open its report. Search records, switch metrics/environments or
+branches, and load older history without dropping points. Content-hashed filenames
+are separate entities. Missing runtime data is a gap, while a removed indexed record
+has a zero value. Each capture is a point, including reruns of the same commit.
+
+The view refreshes every 15 seconds while visible. Measurements are indexed when
+an upload completes; chart requests read D1 rather than historical R2 objects.
+Existing reports backfill in the background when viewed and during hourly cleanup.
+Repository visibility and user access are still verified for every chart request.
+Deleting a report also deletes its indexed measurements.
+
+An enabled plugin in a workflow triggered by `push` to `main` automatically adds
+points after successful uploads. `Boshen/vz-test` provides that live fixture and
+verifies the resulting series. No additional chart-upload credentials are needed.

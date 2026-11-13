@@ -17,6 +17,7 @@ import {
   type DiagnosticRow,
 } from "@vz/protocol";
 import { artifacts, builds, projects, repositories } from "../../db/schema";
+import { projectTrends } from "./trends";
 import { authorizeRepository } from "./github";
 import { bearer } from "./security";
 import {
@@ -164,6 +165,9 @@ api.get("/projects", async (c) => {
     nextPage: rows.length === 20 ? page + 1 : null,
   });
 });
+api.get("/projects/:id/trends", async (c) =>
+  c.json(await projectTrends(c.env.context, c.req.param("id"), c.req.query())),
+);
 api.get("/projects/:id/builds", async (c) => {
   const [row] = await db
     .select({ project: projects, repository: repositories })

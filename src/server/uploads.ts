@@ -5,6 +5,7 @@ import { env } from "void/env";
 import { HTTPException } from "hono/http-exception";
 import { artifacts, builds, projects, repositories, uploadParts } from "../../db/schema";
 import { PART_BYTES, type ArtifactManifest, type BuildManifest } from "@vz/protocol";
+import { indexBuild } from "./trends";
 import { installationFor, refreshRepository } from "./github";
 import {
   issueUploadToken,
@@ -228,6 +229,10 @@ export async function completeBuild(build: typeof builds.$inferSelect) {
     .from(repositories)
     .where(eq(repositories.id, project.repositoryId));
   await refreshRepository(repo.id, repo.installationId);
+  await indexBuild(
+    build,
+    records.map((record) => record.description),
+  );
   await db
     .update(builds)
     .set({ state: "ready" })

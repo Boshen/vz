@@ -8,6 +8,8 @@ import { createGzip, gzipSync } from "node:zlib";
 import type { Supplement } from "./supplement";
 import {
   datasets,
+  diagnosticIdentity,
+  diagnosticMetrics,
   PAGE_BYTES,
   type ArtifactManifest,
   type BuildSummary,
@@ -125,7 +127,7 @@ export async function capture(
       }),
     );
   }
-  async function bounded(row: DiagnosticRow): Promise<DiagnosticRow> {
+  async function bounded(row: DiagnosticRow, dataset: Dataset): Promise<DiagnosticRow> {
     const json = JSON.stringify(row);
     if (Buffer.byteLength(json) + 3 <= PAGE_BYTES) return row;
     const name = `record-${hash(json)}`;
@@ -144,15 +146,35 @@ export async function capture(
       name: row.name.slice(0, 2048),
       bytes: row.bytes,
       durationMs: row.durationMs,
+      calls: row.calls,
+      startMs: row.startMs,
+      plugin: row.plugin && row.plugin.length > 2048 ? hash(row.plugin) : row.plugin,
+      hook: row.hook && row.hook.length > 2048 ? hash(row.hook) : row.hook,
+      version: row.version && row.version.length > 2048 ? hash(row.version) : row.version,
       source: row.source,
       rendered: row.rendered,
       before: row.before,
       after: row.after,
-      details: { fullRecord: name, externalized: true },
+      details: {
+        fullRecord: name,
+        externalized: true,
+        trendScalars: 1,
+        trendEntity: hash(diagnosticIdentity(dataset, row).key),
+        trendValues: diagnosticMetrics(row),
+        gzipBytes: typeof row.details?.gzipBytes === "number" ? row.details.gzipBytes : undefined,
+        duplicated:
+          typeof row.details?.duplicated === "boolean" ? row.details.duplicated : undefined,
+        entryModule:
+          typeof row.details?.entryModule === "string"
+            ? row.details.entryModule.length > 2048
+              ? hash(row.details.entryModule)
+              : row.details.entryModule
+            : undefined,
+      },
     };
   }
   async function addEvent(row: DiagnosticRow) {
-    row = await bounded(row);
+    row = await bounded(row, "events");
     const bytes = Buffer.byteLength(JSON.stringify(row)) + 1;
     if (eventBytes + bytes > PAGE_BYTES && rows.events.length) {
       await page("events", rows.events, eventPage++);
@@ -354,7 +376,7 @@ export async function capture(
       bytes = 2,
       number = 0;
     for (const item of sorted) {
-      const row = await bounded(item);
+      const row = await bounded(item, dataset);
       const size = Buffer.byteLength(JSON.stringify(row)) + 1;
       if (size > PAGE_BYTES - 2) throw new Error(`Diagnostic record exceeds page limit: ${row.id}`);
       if (bytes + size > PAGE_BYTES && buffer.length) {

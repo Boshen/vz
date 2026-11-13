@@ -161,6 +161,7 @@ test("oversized graphs and future events remain lossless without exceeding datas
   const modules = JSON.parse(
     await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path, "utf8"),
   );
+  expect(modules[0].details.trendValues.imports).toBe(30000);
   const artifact = result.artifacts.find(
     (artifact) => artifact.id === modules[0].details.fullRecord,
   )!;

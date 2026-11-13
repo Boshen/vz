@@ -21,6 +21,8 @@ vi.mock("void/auth", () => ({
     },
   }),
 }));
+import { backfillTrends } from "../src/server/trends";
+import type { TrendResponse } from "../src/trends/model";
 import { api } from "../src/server/api";
 import { expectedPartSize, cleanupAbandoned } from "../src/server/uploads";
 import { verifyActionsToken, verifyWebhook } from "../src/server/security";
@@ -139,8 +141,8 @@ async function call(
     },
   );
 }
-async function create(data = manifest()) {
-  const response = await call("/uploads", "POST", await oidc(), JSON.stringify(data));
+async function create(data = manifest(), claims: Record<string, unknown> = {}) {
+  const response = await call("/uploads", "POST", await oidc(claims), JSON.stringify(data));
   expect(response.status).toBe(200);
   return { ...((await response.json()) as { id: string; token: string }), manifest: data };
 }
@@ -465,4 +467,137 @@ test("installation credentials renew before expiration", async () => {
   } finally {
     clock.mockRestore();
   }
+});
+
+async function trendBuild(
+  value: number,
+  options: {
+    ref?: string;
+    environment?: string;
+    project?: string;
+    name?: string;
+    dataset?: "modules" | "plugins";
+    pluginId?: string;
+  } = {},
+) {
+  const data = manifest();
+  data.environment = options.environment ?? "client";
+  data.project = options.project ?? "web";
+  data.summary.outputBytes = value;
+  const content = JSON.stringify([
+    {
+      id: options.pluginId ?? "entry",
+      name: options.name ?? "src/main.ts",
+      bytes: value,
+      ...(options.dataset === "plugins"
+        ? { plugin: "compiler", hook: "Transform", calls: 2, durationMs: value }
+        : {}),
+    },
+  ]);
+  data.artifacts[0] = {
+    ...data.artifacts[0],
+    dataset: options.dataset ?? "modules",
+    bytes: Buffer.byteLength(content),
+    sha256: createHash("sha256").update(content).digest("hex"),
+  };
+  const session = await create(data, { ref: options.ref ?? "refs/heads/main" });
+  await complete(session, content);
+  const projectId = sqlite.prepare("SELECT project_id FROM builds WHERE id = ?").get(session.id)!
+    .project_id as string;
+  return { ...session, projectId };
+}
+async function trends(projectId: string, query = "") {
+  const response = await call(`/projects/${projectId}/trends${query ? `?${query}` : ""}`);
+  expect(response.status).toBe(200);
+  return response.json() as Promise<TrendResponse>;
+}
+test("main timelines isolate branches, projects, environments, and incomplete uploads", async () => {
+  const a = await trendBuild(10),
+    b = await trendBuild(20);
+  await trendBuild(999, { ref: "refs/heads/feature" });
+  await trendBuild(888, { environment: "ssr" });
+  await trendBuild(777, { project: "other" });
+  await create();
+  const response = await trends(a.projectId);
+  expect(response.points.map((point) => point.id)).toEqual([a.id, b.id]);
+  expect(response.points.map((point) => point.values?.outputBytes)).toEqual([10, 20]);
+  expect(response.environments).toEqual(["client", "ssr"]);
+  expect((await trends(a.projectId, "environment=ssr")).points[0].values?.outputBytes).toBe(888);
+  expect((await trends(a.projectId, "branch=feature")).points[0].values?.outputBytes).toBe(999);
+});
+test("dataset series include historical records, aggregate stable plugin identities, and plot removals as zero", async () => {
+  const a = await trendBuild(12),
+    b = await trendBuild(25);
+  await trendBuild(30, { name: "src/other.ts", pluginId: "other" });
+  const catalog = await trends(a.projectId, "dataset=modules&search=main");
+  expect(catalog.entities.map((entry) => entry.label)).toEqual(["src/main.ts"]);
+  const series = await trends(a.projectId, `dataset=modules&entity=${catalog.entities[0].id}`);
+  expect(series.points.map((point) => point.values?.bytes)).toEqual([12, 25, 0]);
+  await trendBuild(14, { dataset: "plugins", pluginId: "1:Transform" });
+  await trendBuild(29, { dataset: "plugins", pluginId: "99:Transform" });
+  const plugins = await trends(b.projectId, "dataset=plugins");
+  expect(plugins.entities).toHaveLength(1);
+  const hook = await trends(b.projectId, `dataset=plugins&entity=${plugins.entities[0].id}`);
+  expect(hook.points.slice(-2).map((point) => point.values?.durationMs)).toEqual([14, 29]);
+});
+test("trend pagination is stable for equal timestamps and rejects cross-project cursors", async () => {
+  const a = await trendBuild(10);
+  await trendBuild(20);
+  await trendBuild(30);
+  await trendBuild(40);
+  sqlite.prepare("UPDATE builds SET created_at = 1000 WHERE project_id = ?").run(a.projectId);
+  const first = await trends(a.projectId, "limit=2");
+  expect(first.points).toHaveLength(2);
+  const second = await trends(a.projectId, `limit=2&cursor=${first.nextCursor}`);
+  expect(second.points).toHaveLength(2);
+  expect(new Set([...first.points, ...second.points].map((point) => point.id)).size).toBe(4);
+  expect(second.nextCursor).toBeNull();
+  const other = await trendBuild(1, { project: "other" });
+  expect((await call(`/projects/${a.projectId}/trends?cursor=${other.id}`)).status).toBe(400);
+});
+test("historical backfill is idempotent and chart reads never fetch R2", async () => {
+  const session = await trendBuild(42);
+  sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
+  sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
+  const before = await trends(session.projectId, "dataset=modules");
+  expect(before.pending).toBe(1);
+  expect(before.points[0].values).toBeNull();
+  await backfillTrends([session.id]);
+  const rowCount = sqlite.prepare("SELECT count(*) AS n FROM trend_measurements").get()!.n;
+  await backfillTrends([session.id]);
+  expect(sqlite.prepare("SELECT count(*) AS n FROM trend_measurements").get()!.n).toBe(rowCount);
+  const get = vi.spyOn(memoryStorage, "get");
+  try {
+    const after = await trends(session.projectId, "dataset=modules");
+    expect(after.pending).toBe(0);
+    expect(after.points[0].values?.bytes).toBe(42);
+    expect(get).not.toHaveBeenCalled();
+  } finally {
+    get.mockRestore();
+  }
+});
+test("timeline reads check current private access and deletion removes indexed data", async () => {
+  const session = await trendBuild(42);
+  state.private = true;
+  expect((await call(`/projects/${session.projectId}/trends`)).status).toBe(401);
+  state.user = { id: "user", name: "Alice" };
+  expect((await call(`/projects/${session.projectId}/trends`)).status).toBe(200);
+  state.access = false;
+  expect((await call(`/projects/${session.projectId}/trends`)).status).toBe(404);
+  state.access = true;
+  expect(
+    (
+      await call(`/builds/${session.id}`, "DELETE", undefined, undefined, {
+        Origin: settings.PLATFORM_ORIGIN,
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    sqlite
+      .prepare("SELECT count(*) AS n FROM trend_measurements WHERE build_id = ?")
+      .get(session.id)!.n,
+  ).toBe(0);
+  expect(
+    sqlite.prepare("SELECT count(*) AS n FROM trend_index WHERE build_id = ?").get(session.id)!.n,
+  ).toBe(0);
 });

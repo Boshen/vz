@@ -23,6 +23,7 @@ import {
   LayoutGrid,
   GitBranch,
 } from "lucide-react";
+import { ProjectTrends } from "./trends/project-trends";
 import "../pages/style.css";
 
 interface Project {
@@ -281,6 +282,7 @@ export function Dashboard({ projectId, reportId }: { projectId?: string; reportI
                   Configure uploads ↗
                 </a>
               </div>
+              <ProjectTrends projectId={history.project.id} />
               <BuildHistory builds={history.builds} />
               {history.nextPage !== null && (
                 <Button
@@ -461,6 +463,10 @@ function Report({
     [baseline, setBaseline] = useState("");
   const [compareDataset, setCompareDataset] = useState<Dataset>("modules");
   const [differences, setDifferences] = useState<DiagnosticRow[]>([]);
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("dataset");
+    if (requested && (datasets as readonly string[]).includes(requested)) setTab(requested);
+  }, []);
   const dataset = tab === "overview" ? "assets" : tab;
   useEffect(() => {
     if (!(datasets as readonly string[]).includes(dataset)) return;
