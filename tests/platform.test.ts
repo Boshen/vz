@@ -729,7 +729,7 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
   sqlite.prepare("UPDATE builds SET state = 'uploading' WHERE id = ?").run(session.id);
   sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
   sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
-  const prefix = `reports/${session.id}/.trend-index-1-chunks`;
+  const prefix = `reports/${session.id}/.trend-index-1-groups`;
   const batches = Array.from({ length: 20 }, (_, i) => [
     {
       dataset: "modules",
@@ -739,8 +739,11 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
     },
   ]);
   await memoryStorage.put(`${prefix}/plan`, Buffer.from(JSON.stringify({ count: batches.length })));
-  for (let i = 0; i < batches.length; i++)
-    await memoryStorage.put(`${prefix}/${i}`, gzipSync(JSON.stringify(batches[i])));
+  for (let i = 0; i < batches.length; i += 16)
+    await memoryStorage.put(
+      `${prefix}/group-${i / 16}`,
+      gzipSync(JSON.stringify(batches.slice(i, i + 16))),
+    );
   await memoryStorage.delete(`${prefix}/cursor`);
   const finish = () => call(`/uploads/${session.id}/complete`, "POST", session.token);
   expect((await finish()).status).toBe(202);
@@ -765,4 +768,58 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
       )
       .get(session.id),
   ).toMatchObject({ n: 20, records: 20 });
+});
+
+test("preparation groups a large index into bounded storage calls", async () => {
+  const { indexBuild } = await import("../src/server/trends");
+  const { db, eq } = await import("void/db");
+  const { builds } = await import("../db/schema");
+  const session = await trendBuild(42);
+  const [build] = await db.select().from(builds).where(eq(builds.id, session.id));
+  sqlite.prepare("DELETE FROM trend_index WHERE build_id = ?").run(session.id);
+  sqlite.prepare("DELETE FROM trend_measurements WHERE build_id = ?").run(session.id);
+  const pages = [];
+  for (let page = 0; page < 20; page++) {
+    const bytes = Buffer.from(
+      JSON.stringify(
+        Array.from({ length: 250 }, (_, index) => ({
+          id: `${page}-${index}`,
+          name: `src/${page}-${index}/${"x".repeat(1000)}`,
+          bytes: 42,
+        })),
+      ),
+    );
+    const description = {
+      id: `modules-${page}`,
+      kind: "dataset" as const,
+      dataset: "modules" as const,
+      page,
+      bytes: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      contentType: "application/json" as const,
+    };
+    pages.push(description);
+    await memoryStorage.put(`reports/${session.id}/${description.id}`, bytes);
+  }
+  const put = vi.spyOn(memoryStorage, "put");
+  try {
+    expect(await indexBuild(build, pages)).toBe(false);
+    const plan = await memoryStorage.get(`reports/${session.id}/.trend-index-1-groups/plan`);
+    const { count } = await plan!.json();
+    expect(count).toBeGreaterThan(16);
+    expect(put).toHaveBeenCalledTimes(Math.ceil(count / 16) + 1);
+    let completed = false;
+    for (let step = 0; step < Math.ceil(count / 16); step++)
+      completed = await indexBuild(build, pages);
+    expect(completed).toBe(true);
+    expect(
+      sqlite
+        .prepare(
+          "SELECT json_extract(metrics, '$.records') AS records FROM trend_measurements WHERE build_id = ? AND dataset = 'modules' AND entity = ''",
+        )
+        .get(session.id)!.records,
+    ).toBe(5000);
+  } finally {
+    put.mockRestore();
+  }
 });

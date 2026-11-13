@@ -163,7 +163,7 @@ export async function indexBuild(
 ): Promise<boolean> {
   const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
   if (indexed?.version === VERSION) return true;
-  const prefix = `reports/${build.id}/.trend-index-${VERSION}-chunks`;
+  const prefix = `reports/${build.id}/.trend-index-${VERSION}-groups`;
   const cached = await storage.get(`${prefix}/plan`);
   let count: number;
   if (cached) {
@@ -171,13 +171,15 @@ export async function indexBuild(
   } else {
     const batches = await prepareIndex(build, descriptions);
     count = batches.length;
-    for (let i = 0; i < count; i += 3)
-      await Promise.all(
-        batches.slice(i, i + 3).map(async (rows, offset) => {
-          await storage.put(`${prefix}/${i + offset}`, gzipSync(JSON.stringify(rows)));
-          batches[i + offset] = [];
-        }),
+    // One storage call holds sixteen SQL batches, keeping preparation below
+    // the invocation API-call limit without retaining the complete serialized index.
+    for (let i = 0; i < count; i += 16) {
+      await storage.put(
+        `${prefix}/group-${i / 16}`,
+        gzipSync(JSON.stringify(batches.slice(i, i + 16))),
       );
+      for (let n = i; n < Math.min(i + 16, count); n++) batches[n] = [];
+    }
     await storage.put(`${prefix}/plan`, Buffer.from(JSON.stringify({ count })));
     // Release the full aggregation before beginning database writes.
     if (count > 16) return false;
@@ -185,14 +187,14 @@ export async function indexBuild(
   const checkpoint = await storage.get(`${prefix}/cursor`);
   const cursor = checkpoint ? ((await checkpoint.json()) as { cursor: number }).cursor : 0;
   const end = Math.min(cursor + 16, count);
+  const object = await storage.get(`${prefix}/group-${cursor / 16}`);
+  if (!object) throw new Error("Missing timeline index checkpoint");
+  const group = (await new Response(
+    object.body.pipeThrough(new DecompressionStream("gzip")),
+  ).json()) as Measurement[][];
   for (let i = cursor; i < end; i += 4)
     await Promise.all(
-      Array.from({ length: Math.min(4, end - i) }, async (_, offset) => {
-        const object = await storage.get(`${prefix}/${i + offset}`);
-        if (!object) throw new Error("Missing timeline index checkpoint");
-        const rows = await new Response(
-          object.body.pipeThrough(new DecompressionStream("gzip")),
-        ).json();
+      group.slice(i - cursor, Math.min(i + 4, end) - cursor).map((rows) => {
         return db.run(sql`
     INSERT INTO trend_measurements (build_id, dataset, entity, label, metrics)
     SELECT ${build.id}, json_extract(value, '$.dataset'), json_extract(value, '$.entity'), json_extract(value, '$.label'), json_extract(value, '$.metrics')
@@ -207,9 +209,10 @@ export async function indexBuild(
     .insert(trendIndex)
     .values({ buildId: build.id, version: VERSION })
     .onConflictDoUpdate({ target: trendIndex.buildId, set: { version: VERSION } });
-  for (let i = 0; i < count; i += 500)
+  const groups = Math.ceil(count / 16);
+  for (let i = 0; i < groups; i += 500)
     await storage.delete(
-      Array.from({ length: Math.min(500, count - i) }, (_, n) => `${prefix}/${i + n}`),
+      Array.from({ length: Math.min(500, groups - i) }, (_, n) => `${prefix}/group-${i + n}`),
     );
   await storage.delete([`${prefix}/plan`, `${prefix}/cursor`]);
   return true;
