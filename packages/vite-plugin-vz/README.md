@@ -30,6 +30,7 @@ permissions:
 ```
 
 Uploads run after a successful build, with one report per built environment.
+In-memory (`build.write: false`) builds are captured too, using the generated bundle.
 Outside GitHub Actions, the plugin performs no capture or network requests.
 Without OIDC permissions it skips collection and prints setup instructions.
 

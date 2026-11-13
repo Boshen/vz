@@ -35,7 +35,7 @@ export default function vz(options: VzOptions): Plugin {
     if (options.strict) throw new Error(message);
     (config?.logger ?? console).warn(message);
   }
-  return {
+  const plugin: Plugin = {
     name: "vite-plugin-vz",
     enforce: "post",
     sharedDuringBuild: true,
@@ -96,6 +96,15 @@ export default function vz(options: VzOptions): Plugin {
           loc: log.loc,
           frame: log.frame,
         });
+    },
+    generateBundle: {
+      order: "post",
+      async handler(options, bundle) {
+        if (!active || this.environment.config.build.write !== false) return;
+        const hook = plugin.writeBundle;
+        const handler = typeof hook === "function" ? hook : hook?.handler;
+        await handler?.call(this, options, bundle);
+      },
     },
     writeBundle: {
       order: "post",
@@ -243,4 +252,5 @@ export default function vz(options: VzOptions): Plugin {
       },
     },
   };
+  return plugin;
 }

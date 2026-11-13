@@ -6,7 +6,12 @@ import { createBuilder } from "vite";
 import vz from "../packages/vite-plugin-vz/src/index";
 import { buildManifestSchema, type BuildManifest } from "@vz/protocol";
 
-test.each([false, true])("real Vite capture with config reload: %s", async (reloadConfig) => {
+test.each([
+  [false, true],
+  [true, true],
+  [false, false],
+  [true, false],
+])("real Vite capture with config reload/write: %s/%s", async (reloadConfig, write) => {
   const fixture = await mkdtemp(resolve(".void/vz-integration-"));
   await writeFile(join(fixture, "package.json"), '{"name":"fixture","type":"module"}');
   await writeFile(join(fixture, "entry.js"), "export const answer = 42;");
@@ -77,6 +82,7 @@ test.each([false, true])("real Vite capture with config reload: %s", async (relo
         ],
         define: { PRIVATE_CONFIG_SECRET: JSON.stringify("do-not-upload-config") },
         build: {
+          write,
           sourcemap: true,
           lib: { entry: join(fixture, "entry.js"), formats: ["es", "cjs"] },
           outDir: join(fixture, "dist"),
