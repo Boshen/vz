@@ -4,7 +4,8 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { pipeline } from "node:stream/promises";
-import { createGzip } from "node:zlib";
+import { createGzip, gzipSync } from "node:zlib";
+import type { Supplement } from "./supplement";
 import {
   datasets,
   PAGE_BYTES,
@@ -42,11 +43,30 @@ export async function describeArtifact(
 }
 
 /** Native JSONL is decoded one event at a time. Large source strings live on disk. */
-export async function capture(directory: string, output: string, root: string) {
+export async function capture(
+  directory: string,
+  output: string,
+  root: string,
+  supplements: Supplement[] = [],
+) {
   await mkdir(output, { recursive: true });
-  const meta = JSON.parse(await readFile(join(directory, "meta.json"), "utf8")) as {
-    build_id?: string;
-  };
+  const metadata = await readFile(join(directory, "meta.json"), "utf8");
+  let sessions: { build_id?: string }[];
+  try {
+    sessions = [JSON.parse(metadata)];
+  } catch {
+    sessions = metadata
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
+  }
+  const builds = new Map(
+    sessions
+      .filter((session) => session.build_id)
+      .map((session, index) => [session.build_id!, String(index)]),
+  );
+  const chunkId = (value: unknown, build: unknown) =>
+    builds.size > 1 ? `${builds.get(scalar(build))}:${scalar(value)}` : scalar(value);
   const rows = {
     modules: [],
     chunks: [],
@@ -61,6 +81,7 @@ export async function capture(directory: string, output: string, root: string) {
   const calls = new Map<string, { event: NativeEvent; source?: string }>();
   const timings = new Map<string, DiagnosticRow>();
   const modules = new Map<string, DiagnosticRow>();
+  const packages = new Map<string, DiagnosticRow>();
   let start = Infinity,
     end = 0,
     sequence = 0,
@@ -104,7 +125,34 @@ export async function capture(directory: string, output: string, root: string) {
       }),
     );
   }
+  async function bounded(row: DiagnosticRow): Promise<DiagnosticRow> {
+    const json = JSON.stringify(row);
+    if (Buffer.byteLength(json) + 3 <= PAGE_BYTES) return row;
+    const name = `record-${hash(json)}`;
+    const path = join(output, name);
+    await writeFile(path, gzipSync(json));
+    artifacts.push(
+      await describeArtifact(path, {
+        id: name,
+        kind: "metadata",
+        name: `${name}.json.gz`,
+        contentType: "application/gzip",
+      }),
+    );
+    return {
+      id: row.id.length > 2048 ? hash(row.id) : row.id,
+      name: row.name.slice(0, 2048),
+      bytes: row.bytes,
+      durationMs: row.durationMs,
+      source: row.source,
+      rendered: row.rendered,
+      before: row.before,
+      after: row.after,
+      details: { fullRecord: name, externalized: true },
+    };
+  }
   async function addEvent(row: DiagnosticRow) {
+    row = await bounded(row);
     const bytes = Buffer.byteLength(JSON.stringify(row)) + 1;
     if (eventBytes + bytes > PAGE_BYTES && rows.events.length) {
       await page("events", rows.events, eventPage++);
@@ -125,8 +173,8 @@ export async function capture(directory: string, output: string, root: string) {
       if (ref) strings.set(String(e.id), ref);
       continue;
     }
-    if (meta.build_id && e.build_id !== meta.build_id) continue;
-    if (e.timestamp) {
+    if (builds.size && !builds.has(scalar(e.build_id))) continue;
+    if (typeof e.timestamp === "number" && Number.isFinite(e.timestamp)) {
       start = Math.min(start, e.timestamp);
       end = Math.max(end, e.timestamp);
     }
@@ -138,7 +186,7 @@ export async function capture(directory: string, output: string, root: string) {
           id: key,
           name: key,
           imports: ((item.imports as NativeItem[]) ?? []).map((edge) => id(edge.module_id)),
-          details: { external: item.is_external },
+          details: { ...modules.get(key)?.details, ...item, external: item.is_external },
         });
       }
     if (e.action === "ModuleRenderedReady")
@@ -147,29 +195,50 @@ export async function capture(directory: string, output: string, root: string) {
         modules.set(key, { ...modules.get(key), id: key, name: key, bytes: Number(item.bytes) });
       }
     if (e.action === "ChunkGraphReady")
-      rows.chunks = (e.chunks as NativeItem[]).map((item) => ({
-        id: String(item.chunk_id),
-        name: String(item.name ?? item.chunk_id),
-        modules: (item.modules as string[]).map(id),
-        imports: ((item.imports as unknown[]) ?? []).map((edge) =>
-          String(typeof edge === "object" && edge ? (edge as NativeItem).chunk_id : edge),
-        ),
-        details: {
-          entry: item.is_user_defined_entry,
-          async: item.is_async_entry,
-          reason: item.reason,
-          entryModule: id(item.entry_module),
-        },
-      }));
+      rows.chunks.push(
+        ...(e.chunks as NativeItem[]).map((item) => ({
+          id: chunkId(item.chunk_id, e.build_id),
+          name: String(item.name ?? item.chunk_id),
+          modules: (item.modules as string[]).map(id),
+          imports: ((item.imports as unknown[]) ?? []).map((edge) =>
+            chunkId(
+              typeof edge === "object" && edge ? (edge as NativeItem).chunk_id : edge,
+              e.build_id,
+            ),
+          ),
+          details: {
+            ...item,
+            entry: item.is_user_defined_entry,
+            async: item.is_async_entry,
+            reason: item.reason,
+            entryModule: id(item.entry_module),
+            output: builds.get(scalar(e.build_id)),
+          },
+        })),
+      );
     if (e.action === "PackageGraphReady")
-      rows.packages = (e.packages as NativeItem[]).map((item) => ({
-        id: id(item.package_id),
-        name: String(item.name),
-        version: String(item.version),
-        bytes: Number(item.size ?? 0),
-        modules: (item.modules as string[]).map(id),
-        details: { dependencyType: item.dependency_type },
-      }));
+      for (const item of e.packages as NativeItem[]) {
+        const key = id(item.package_id),
+          previous = packages.get(key);
+        const variants = (previous?.details?.outputs ?? []) as unknown[];
+        packages.set(key, {
+          id: key,
+          name: String(item.name),
+          version: String(item.version),
+          bytes: (previous?.bytes ?? 0) + Number(item.size ?? 0),
+          modules: [
+            ...new Set([
+              ...(previous?.modules ?? []),
+              ...((item.modules as string[]) ?? []).map(id),
+            ]),
+          ],
+          details: {
+            ...item,
+            dependencyType: item.dependency_type,
+            outputs: [...variants, { output: builds.get(scalar(e.build_id)), ...item }],
+          },
+        });
+      }
     if (e.action === "AssetsReady")
       for (const item of e.assets as NativeItem[]) {
         const sourceId = await source(item.content);
@@ -178,8 +247,9 @@ export async function capture(directory: string, output: string, root: string) {
           name: String(item.filename),
           bytes: Number(item.size),
           source: sourceId,
+          details: Object.fromEntries(Object.entries(item).filter(([key]) => key !== "content")),
         });
-        const chunk = rows.chunks.find((row) => row.id === String(item.chunk_id));
+        const chunk = rows.chunks.find((row) => row.id === chunkId(item.chunk_id, e.build_id));
         if (chunk) {
           chunk.bytes = Number(item.size);
           chunk.details = { ...chunk.details, filename: item.filename };
@@ -216,6 +286,12 @@ export async function capture(directory: string, output: string, root: string) {
             durationMs,
             before: call.source,
             after: text,
+            details: {
+              start: Object.fromEntries(
+                Object.entries(call.event).filter(([key]) => key !== "content"),
+              ),
+              end: Object.fromEntries(Object.entries(e).filter(([key]) => key !== "content")),
+            },
           });
           const module = modules.get(moduleId) ?? { id: moduleId, name: moduleId };
           if (text) module.source = text;
@@ -228,11 +304,38 @@ export async function capture(directory: string, output: string, root: string) {
         id: String(sequence++),
         name: e.action,
         startMs: Number(e.timestamp ?? start) - start,
+        details: e,
       });
   }
   if (!Number.isFinite(start) || !rows.chunks.length)
     throw new Error("Unsupported or incomplete Rolldown diagnostic capture");
+  const supplementedAssets = new Set(
+    supplements.flatMap((supplement) => supplement.assets.map((row) => row.name)),
+  );
+  rows.assets = rows.assets.filter((row) => !supplementedAssets.has(row.name));
+  for (const supplement of supplements) {
+    artifacts.push(...supplement.artifacts);
+    for (const module of supplement.modules) {
+      const current = modules.get(module.id);
+      modules.set(module.id, {
+        ...current,
+        ...module,
+        source: module.source ?? current?.source,
+        details: { ...current?.details, ...module.details },
+      });
+    }
+    for (const chunk of supplement.chunks) {
+      const current = rows.chunks.find((row) => row.details?.filename === chunk.name);
+      if (current) {
+        current.source = chunk.source;
+        current.bytes = chunk.bytes;
+        current.details = { ...current.details, ...chunk.details };
+      } else rows.chunks.push(chunk);
+    }
+    rows.assets.push(...supplement.assets);
+  }
   rows.modules = [...modules.values()];
+  rows.packages = [...packages.values()];
   rows.plugins = [...timings.values()];
   const versions = new Map<string, Set<string>>();
   for (const row of rows.packages) {
@@ -250,7 +353,8 @@ export async function capture(directory: string, output: string, root: string) {
     let buffer: DiagnosticRow[] = [],
       bytes = 2,
       number = 0;
-    for (const row of sorted) {
+    for (const item of sorted) {
+      const row = await bounded(item);
       const size = Buffer.byteLength(JSON.stringify(row)) + 1;
       if (size > PAGE_BYTES - 2) throw new Error(`Diagnostic record exceeds page limit: ${row.id}`);
       if (bytes + size > PAGE_BYTES && buffer.length) {
@@ -287,5 +391,8 @@ export async function capture(directory: string, output: string, root: string) {
     assets: rows.assets.length,
     packages: rows.packages.length,
   };
-  return { summary, artifacts };
+  return {
+    summary,
+    artifacts: [...new Map(artifacts.map((artifact) => [artifact.id, artifact])).values()],
+  };
 }

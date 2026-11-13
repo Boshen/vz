@@ -244,9 +244,15 @@ api.get("/builds/:id/artifacts/:artifact", async (c) => {
     range ? { range: { offset, length } } : undefined,
   );
   if (!object) throw new HTTPException(404);
+  let filename = artifact.name?.replaceAll("\\", "/").split("/").at(-1) || artifact.id;
+  if (artifact.contentType === "application/gzip" && !filename.endsWith(".gz")) filename += ".gz";
+  const encodedFilename = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   const headers = new Headers({
     "Content-Type": artifact.kind === "source" ? "text/plain; charset=utf-8" : artifact.contentType,
-    "Content-Disposition": `attachment; filename="${artifact.id}${artifact.kind === "raw" ? ".json.gz" : ""}"`,
+    "Content-Disposition": `attachment; filename="${artifact.id}${artifact.contentType === "application/gzip" ? ".gz" : ""}"; filename*=UTF-8''${encodedFilename}`,
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; sandbox",

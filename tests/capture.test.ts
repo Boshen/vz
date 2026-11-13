@@ -119,3 +119,69 @@ test("disabled and local plugin configurations never enable collection", async (
 test("manifest validation rejects duplicate or unsafe artifacts and unsupported schemas", () => {
   expect(buildManifestSchema.safeParse({ version: 99 }).success).toBe(false);
 });
+
+test("oversized graphs and future events remain lossless without exceeding dataset pages", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vz-large-record-"));
+  temporary.push(directory);
+  await writeFile(join(directory, "meta.json"), JSON.stringify({ build_id: "large" }));
+  const imports = Array.from({ length: 30000 }, (_, index) => ({
+    module_id: `/app/dependency-${index}.ts`,
+    kind: "dynamic-import",
+  }));
+  const payload = "future-payload".repeat(PAGE_BYTES / 4);
+  const events = [
+    { action: "BuildStart", timestamp: 0 },
+    {
+      action: "ModuleGraphReady",
+      modules: [
+        {
+          id: "/app/main.ts",
+          imports,
+          importers: ["/app/entry.ts"],
+          is_external: false,
+          future: { retained: true },
+        },
+      ],
+    },
+    {
+      action: "ChunkGraphReady",
+      chunks: [{ chunk_id: 0, name: "main", modules: ["/app/main.ts"], imports: [] }],
+    },
+    { action: "FutureEvent", timestamp: 10, payload },
+    { action: "BuildEnd", timestamp: 20 },
+  ];
+  await writeFile(
+    join(directory, "logs.json"),
+    events.map((event) => JSON.stringify({ build_id: "large", ...event })).join("\n"),
+  );
+  const result = await capture(directory, join(directory, "output"), "/app");
+  expect(result.summary.durationMs).toBe(20);
+  const pages = result.artifacts.filter((artifact) => artifact.kind === "dataset");
+  expect(pages.every((artifact) => artifact.bytes <= PAGE_BYTES)).toBe(true);
+  const modules = JSON.parse(
+    await readFile(result.artifacts.find((artifact) => artifact.id === "modules-0")!.path, "utf8"),
+  );
+  const artifact = result.artifacts.find(
+    (artifact) => artifact.id === modules[0].details.fullRecord,
+  )!;
+  const { gunzipSync } = await import("node:zlib");
+  const full = JSON.parse(gunzipSync(await readFile(artifact.path)).toString());
+  expect(full.imports).toHaveLength(30000);
+  expect(full.details.imports[0].kind).toBe("dynamic-import");
+  expect(full.details.importers).toEqual(["/app/entry.ts"]);
+  expect(full.details.future.retained).toBe(true);
+  const eventRows = (
+    await Promise.all(
+      pages
+        .filter((page) => page.dataset === "events")
+        .map(async (page) => JSON.parse(await readFile(page.path, "utf8"))),
+    )
+  ).flat();
+  const event = eventRows.find((row) => row.name === "FutureEvent");
+  const eventArtifact = result.artifacts.find(
+    (artifact) => artifact.id === event.details.fullRecord,
+  )!;
+  expect(
+    JSON.parse(gunzipSync(await readFile(eventArtifact.path)).toString()).details.payload,
+  ).toBe(payload);
+});

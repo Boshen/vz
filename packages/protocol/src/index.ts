@@ -14,7 +14,8 @@ const key = z
 export const artifactSchema = z
   .object({
     id: key,
-    kind: z.enum(["dataset", "source", "raw", "metadata"]),
+    kind: z.enum(["dataset", "source", "raw", "metadata", "output", "sourcemap"]),
+    name: z.string().min(1).max(1024).optional(),
     bytes: z
       .number()
       .int()
@@ -84,6 +85,7 @@ export interface DiagnosticRow {
   imports?: string[];
   modules?: string[];
   source?: string;
+  rendered?: string;
   before?: string;
   after?: string;
   plugin?: string;

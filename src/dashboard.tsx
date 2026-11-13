@@ -811,6 +811,7 @@ function Report({
           )}
         </TabsContent>
       </Tabs>
+      <CapturedArtifacts report={report} />
       <div className="report-footer">
         <div>
           <span className="status-dot" /> Full Rolldown diagnostics{" "}
@@ -818,10 +819,10 @@ function Report({
         </div>
         <div>
           {report.manifest.artifacts
-            .filter((artifact) => artifact.kind === "raw" || artifact.kind === "metadata")
+            .filter((artifact) => artifact.kind === "raw")
             .map((artifact) => (
               <a key={artifact.id} href={`/api/v1/builds/${report.id}/artifacts/${artifact.id}`}>
-                Download {artifact.kind} ↓
+                Download {artifact.name ?? artifact.id} ↓
               </a>
             ))}
           <Button
@@ -841,6 +842,54 @@ function Report({
     </>
   );
 }
+function CapturedArtifacts({ report }: { report: BuildRecord }) {
+  const [limit, setLimit] = useState(50);
+  const files = report.manifest.artifacts.filter(
+    (artifact) => artifact.kind !== "source" && artifact.kind !== "dataset",
+  );
+  return (
+    <details className="panel mt-6 overflow-hidden">
+      <summary className="cursor-pointer px-5 py-4 text-sm font-medium">
+        Captured files <span className="ml-2 text-muted-foreground">{files.length}</span>
+      </summary>
+      <div className="table-scroll max-h-96 overflow-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Kind</th>
+              <th>Stored size</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            {files.slice(0, limit).map((file) => (
+              <tr key={file.id}>
+                <td title={file.id}>{file.name ?? file.id}</td>
+                <td>{file.kind}</td>
+                <td>{bytes(file.bytes)}</td>
+                <td>
+                  <a
+                    className="underline underline-offset-4"
+                    href={`/api/v1/builds/${report.id}/artifacts/${file.id}`}
+                  >
+                    Download{file.contentType === "application/gzip" ? " .gz" : ""} ↓
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {files.length > limit && (
+        <Button className="m-4" variant="outline" size="sm" onClick={() => setLimit(limit + 50)}>
+          Show more files
+        </Button>
+      )}
+    </details>
+  );
+}
+
 function Pagination({
   page,
   pages,
@@ -1044,7 +1093,7 @@ function Details({
     setSources({});
     setError("");
     void Promise.all(
-      (["source", "before", "after"] as const)
+      (["source", "before", "after", "rendered"] as const)
         .filter((key) => row[key])
         .map(async (key) => {
           const response = await fetch(`/api/v1/builds/${reportId}/artifacts/${row[key]}`, {
@@ -1079,19 +1128,33 @@ function Details({
       {Object.entries(sources).map(([key, source]) => (
         <div key={key}>
           <h4>
-            {key === "before" ? "Before transform" : key === "after" ? "After transform" : "Source"}
+            {key === "before"
+              ? "Before transform"
+              : key === "after"
+                ? "After transform"
+                : key === "rendered"
+                  ? "Rendered module"
+                  : "Source"}
           </h4>
           <pre>{source}</pre>
           <small>
             Preview limited to 128 kB.{" "}
             <a
-              href={`/api/v1/builds/${reportId}/artifacts/${row[key as "source" | "before" | "after"]}`}
+              href={`/api/v1/builds/${reportId}/artifacts/${row[key as "source" | "before" | "after" | "rendered"]}`}
             >
               Download full source ↓
             </a>
           </small>
         </div>
       ))}
+      {typeof row.details?.fullRecord === "string" && (
+        <a
+          className={buttonVariants({ variant: "outline", size: "sm" })}
+          href={`/api/v1/builds/${reportId}/artifacts/${row.details.fullRecord}`}
+        >
+          Download complete record (.json.gz)
+        </a>
+      )}
       <h4>Metadata</h4>
       <pre>{JSON.stringify(row, null, 2)}</pre>
     </aside>

@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-vz",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Upload Vite and Rolldown diagnostics to VZ using GitHub Actions OIDC",
   "license": "MIT",
   "files": [
