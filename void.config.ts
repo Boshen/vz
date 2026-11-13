@@ -9,6 +9,7 @@ export default defineConfig({
     typedRoutes: true,
   },
   worker: {
+    limits: { cpu_ms: 30000 },
     compatibility_date: "2026-02-24",
   },
 });
