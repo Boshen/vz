@@ -21,6 +21,7 @@ import {
   trendMeasurements,
 } from "../../db/schema";
 import { readArtifactJson } from "./artifact-json";
+import { uploadDb } from "./upload-db";
 import { authorizeRepository } from "./github";
 import {
   trendDatasets,
@@ -161,6 +162,7 @@ export async function indexBuild(
   build: typeof builds.$inferSelect,
   descriptions?: ArtifactManifest[],
 ): Promise<boolean> {
+  const db = uploadDb();
   const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
   if (indexed?.version === VERSION) return true;
   const prefix = `reports/${build.id}/.trend-index-${VERSION}-groups`;
@@ -192,17 +194,13 @@ export async function indexBuild(
   const group = (await new Response(
     object.body.pipeThrough(new DecompressionStream("gzip")),
   ).json()) as Measurement[][];
-  for (let i = cursor; i < end; i += 4)
-    await Promise.all(
-      group.slice(i - cursor, Math.min(i + 4, end) - cursor).map((rows) => {
-        return db.run(sql`
+  for (const rows of group)
+    await db.run(sql`
     INSERT INTO trend_measurements (build_id, dataset, entity, label, metrics)
     SELECT ${build.id}, json_extract(value, '$.dataset'), json_extract(value, '$.entity'), json_extract(value, '$.label'), json_extract(value, '$.metrics')
     FROM json_each(${JSON.stringify(rows)}) WHERE true
     ON CONFLICT (build_id, dataset, entity) DO UPDATE SET label = excluded.label, metrics = excluded.metrics
   `);
-      }),
-    );
   await storage.put(`${prefix}/cursor`, Buffer.from(JSON.stringify({ cursor: end })));
   if (end < count) return false;
   await db
