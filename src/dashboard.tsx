@@ -3,11 +3,9 @@ import { auth } from "void/client";
 import {
   datasets,
   type BuildRecord,
-  type BuildSummary,
   type Dataset,
   type DiagnosticRow,
   type ArtifactManifest,
-  type Provenance,
 } from "@vz/protocol";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,42 +25,9 @@ import {
 import { RegressionSummary } from "./regression-summary";
 import { ProjectTrends } from "./trends/project-trends";
 import { formatTrendDate } from "./trends/model";
+import type { Project, History, Session, DashboardInitial, BuildListItem } from "./dashboard-model";
 import "../pages/style.css";
 
-export interface Project {
-  id: string;
-  key: string;
-  repository: string;
-  private: boolean;
-}
-interface BuildListItem {
-  id: string;
-  createdAt: number;
-  environment: string;
-  summary: BuildSummary;
-  provenance: Provenance;
-}
-export interface History {
-  project: Project;
-  builds: BuildListItem[];
-  nextPage: number | null;
-}
-export interface Session {
-  authConfigured?: boolean;
-  user: { name: string; image?: string | null } | null;
-  appSlug: string | null;
-}
-export interface DashboardInitial {
-  session: Session;
-  projects: Project[];
-  nextProjectPage: number | null;
-  history: History | null;
-  report: BuildRecord | null;
-  trends: import("./trends/model").TrendResponse | null;
-  regression: import("./regressions").RegressionResult | null;
-  error: string;
-  overview: { rows: DiagnosticRow[]; pages: number } | null;
-}
 type Comparison = {
   before: string | null;
   metrics: Record<string, { before: number; after: number; delta: number }> | null;

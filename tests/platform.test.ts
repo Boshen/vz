@@ -1,4 +1,4 @@
-import type { DashboardInitial } from "../src/dashboard";
+import type { DashboardInitial } from "../src/dashboard-model";
 import type { BuildRecord, ArtifactManifest } from "@vz/protocol";
 import { beforeAll, beforeEach, afterAll, expect, test, vi } from "vitest";
 import { createHash, createHmac } from "node:crypto";
@@ -762,6 +762,27 @@ test("large indexes resume checkpoints and remain unpublished until every batch 
   // A lost cursor receipt can repeat writes without double-counting measurements.
   await memoryStorage.delete(`${prefix}/cursor`);
   expect((await finish()).status).toBe(202);
+  const prepare = d1.prepare.bind(d1);
+  const markerFailure = vi.spyOn(d1, "prepare").mockImplementation((query) => {
+    if (query.startsWith('insert into "trend_index"'))
+      throw new Error("Temporary marker write failure");
+    return prepare(query);
+  });
+  try {
+    expect((await finish()).status).toBe(500);
+    expect((await call(`/builds/${session.id}`)).status).toBe(404);
+  } finally {
+    markerFailure.mockRestore();
+  }
+  const cleanupFailure = vi
+    .spyOn(memoryStorage, "delete")
+    .mockRejectedValueOnce(new Error("Temporary checkpoint cleanup failure"));
+  try {
+    expect((await finish()).status).toBe(500);
+    expect((await call(`/builds/${session.id}`)).status).toBe(404);
+  } finally {
+    cleanupFailure.mockRestore();
+  }
   expect((await finish()).status).toBe(200);
   expect((await call(`/builds/${session.id}`)).status).toBe(200);
   expect(

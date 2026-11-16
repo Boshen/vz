@@ -32,6 +32,7 @@ import {
   type TrendValues,
 } from "../trends/model";
 const VERSION = 1;
+const GROUP_BATCHES = 16;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 interface Measurement {
   dataset: TrendDataset;
@@ -158,15 +159,30 @@ async function prepareIndex(build: typeof builds.$inferSelect, descriptions?: Ar
   return batches;
 }
 
+async function clearIndexCheckpoint(prefix: string, count: number) {
+  const groups = Math.ceil(count / GROUP_BATCHES);
+  for (let i = 0; i < groups; i += 500)
+    await storage.delete(
+      Array.from({ length: Math.min(500, groups - i) }, (_, n) => `${prefix}/group-${i + n}`),
+    );
+  await storage.delete([`${prefix}/plan`, `${prefix}/cursor`]);
+}
+
 /** Checkpoint immutable measurements before bounded, idempotent database writes. */
 export async function indexBuild(
   build: typeof builds.$inferSelect,
   descriptions?: ArtifactManifest[],
 ): Promise<boolean> {
   const db = uploadDb();
-  const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
-  if (indexed?.version === VERSION) return true;
   const prefix = `reports/${build.id}/.trend-index-${VERSION}-groups`;
+  const [indexed] = await db.select().from(trendIndex).where(eq(trendIndex.buildId, build.id));
+  if (indexed?.version === VERSION) {
+    const remaining = await storage.get(`${prefix}/plan`);
+    if (remaining)
+      await clearIndexCheckpoint(prefix, ((await remaining.json()) as { count: number }).count);
+    else await storage.delete(`${prefix}/cursor`);
+    return true;
+  }
   const cached = await storage.get(`${prefix}/plan`);
   let count: number;
   if (cached) {
@@ -176,44 +192,41 @@ export async function indexBuild(
     count = batches.length;
     // One storage call holds sixteen SQL batches, keeping preparation below
     // the invocation API-call limit without retaining the complete serialized index.
-    for (let i = 0; i < count; i += 16) {
+    for (let i = 0; i < count; i += GROUP_BATCHES) {
       await storage.put(
-        `${prefix}/group-${i / 16}`,
-        gzipSync(JSON.stringify(batches.slice(i, i + 16))),
+        `${prefix}/group-${i / GROUP_BATCHES}`,
+        gzipSync(JSON.stringify(batches.slice(i, i + GROUP_BATCHES))),
       );
-      for (let n = i; n < Math.min(i + 16, count); n++) batches[n] = [];
+      for (let n = i; n < Math.min(i + GROUP_BATCHES, count); n++) batches[n] = [];
     }
     await storage.put(`${prefix}/plan`, Buffer.from(JSON.stringify({ count })));
     // Release the full aggregation before beginning database writes.
-    if (count > 16) return false;
+    if (count > GROUP_BATCHES) return false;
   }
   const checkpoint = await storage.get(`${prefix}/cursor`);
   const cursor = checkpoint ? ((await checkpoint.json()) as { cursor: number }).cursor : 0;
-  const end = Math.min(cursor + 16, count);
-  const object = await storage.get(`${prefix}/group-${cursor / 16}`);
-  if (!object) throw new Error("Missing timeline index checkpoint");
-  const group = (await new Response(
-    object.body.pipeThrough(new DecompressionStream("gzip")),
-  ).json()) as Measurement[][];
-  for (const rows of group)
-    await db.run(sql`
+  if (cursor < count) {
+    const end = Math.min(cursor + GROUP_BATCHES, count);
+    const object = await storage.get(`${prefix}/group-${cursor / GROUP_BATCHES}`);
+    if (!object) throw new Error("Missing timeline index checkpoint");
+    const group = (await new Response(
+      object.body.pipeThrough(new DecompressionStream("gzip")),
+    ).json()) as Measurement[][];
+    for (const rows of group)
+      await db.run(sql`
     INSERT INTO trend_measurements (build_id, dataset, entity, label, metrics)
     SELECT ${build.id}, json_extract(value, '$.dataset'), json_extract(value, '$.entity'), json_extract(value, '$.label'), json_extract(value, '$.metrics')
     FROM json_each(${JSON.stringify(rows)}) WHERE true
     ON CONFLICT (build_id, dataset, entity) DO UPDATE SET label = excluded.label, metrics = excluded.metrics
   `);
-  await storage.put(`${prefix}/cursor`, Buffer.from(JSON.stringify({ cursor: end })));
-  if (end < count) return false;
+    await storage.put(`${prefix}/cursor`, Buffer.from(JSON.stringify({ cursor: end })));
+    if (end < count) return false;
+  }
   await db
     .insert(trendIndex)
     .values({ buildId: build.id, version: VERSION })
     .onConflictDoUpdate({ target: trendIndex.buildId, set: { version: VERSION } });
-  const groups = Math.ceil(count / 16);
-  for (let i = 0; i < groups; i += 500)
-    await storage.delete(
-      Array.from({ length: Math.min(500, groups - i) }, (_, n) => `${prefix}/group-${i + n}`),
-    );
-  await storage.delete([`${prefix}/plan`, `${prefix}/cursor`]);
+  await clearIndexCheckpoint(prefix, count);
   return true;
 }
 export async function backfillTrends(ids?: string[]) {

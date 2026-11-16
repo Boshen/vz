@@ -139,7 +139,10 @@ parallel artifact workers, and bounded retry backoff. Dataset pages are at most
 512 KiB; source and compressed native JSONL are separate immutable artifacts.
 Artifact completion streams SHA-256 verification before publication. Captures only
 become readable once every artifact is complete. Duplicate capture initialization,
-part uploads, and sequential completion retries are idempotent. Credentials expire
+part uploads, and sequential completion retries are idempotent. Final index-marker
+and checkpoint-cleanup failures can also be retried without replaying completed
+groups. Fatal artifact failures cancel in-flight work and stop the upload queue;
+the finalization deadline includes active requests. Credentials expire
 after two hours; a new OIDC initialization for the same manifest renews them.
 
 Reports support module/chunk graphs, size maps, package versions, plugin timings,

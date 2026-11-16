@@ -293,7 +293,10 @@ export function ProjectTrends({
   const cursorKey = requestWindows.key === requestKey ? requestWindows.cursors.join(",") : "";
   useEffect(() => {
     const controller = new AbortController();
+    let inFlight = false;
     const load = async () => {
+      if (inFlight || controller.signal.aborted) return;
+      inFlight = true;
       try {
         const windows = await Promise.all(
           ["", ...cursorKey.split(",").filter(Boolean)].map(async (cursor) => {
@@ -337,6 +340,7 @@ export function ProjectTrends({
         if (!controller.signal.aborted)
           setError(failure instanceof Error ? failure.message : "Unable to load trends");
       } finally {
+        inFlight = false;
         if (!controller.signal.aborted) setLoading(false);
       }
     };

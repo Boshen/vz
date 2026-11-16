@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { DashboardInitial, History, Session, Project } from "../dashboard";
+import type { DashboardInitial, History, Session, Project } from "../dashboard-model";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { errors as joseErrors } from "jose";
